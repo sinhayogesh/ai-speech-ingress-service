@@ -14,6 +14,10 @@ spec:
     metadata:
       labels:
         app: {{ .Release.Name }}
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "{{ .Values.observability.metrics.port }}"
+        prometheus.io/path: "/metrics"
     spec:
       containers:
         - name: {{ .Release.Name }}
@@ -22,9 +26,25 @@ spec:
             - name: grpc
               containerPort: {{ .Values.grpc.port }}
               protocol: TCP
+            - name: metrics
+              containerPort: {{ .Values.observability.metrics.port }}
+              protocol: TCP
           env:
             - name: GRPC_PORT
               value: "{{ .Values.grpc.port }}"
+            # Observability
+            - name: METRICS_ENABLED
+              value: "{{ .Values.observability.metrics.enabled }}"
+            - name: METRICS_PORT
+              value: "{{ .Values.observability.metrics.port }}"
+            - name: LOG_LEVEL
+              value: "{{ .Values.observability.logging.level }}"
+            - name: LOG_FORMAT
+              value: "{{ .Values.observability.logging.format }}"
+            # STT Provider
+            - name: STT_PROVIDER
+              value: "{{ .Values.sttProvider }}"
+            # Kafka
             - name: KAFKA_ENABLED
               value: "{{ .Values.kafka.enabled }}"
             - name: KAFKA_BROKERS
@@ -35,6 +55,13 @@ spec:
               value: "{{ .Values.kafka.topicFinal }}"
             - name: KAFKA_PRINCIPAL
               value: "{{ .Values.kafka.principal }}"
+            # Segment Limits
+            - name: SEGMENT_MAX_AUDIO_BYTES
+              value: "{{ .Values.segmentLimits.maxAudioBytes }}"
+            - name: SEGMENT_MAX_DURATION
+              value: "{{ .Values.segmentLimits.maxDuration }}"
+            - name: SEGMENT_MAX_PARTIALS
+              value: "{{ .Values.segmentLimits.maxPartials }}"
             {{- range $key, $value := .Values.env }}
             - name: {{ $key }}
               value: "{{ $value }}"
@@ -51,6 +78,13 @@ spec:
             periodSeconds: 5
             successThreshold: 1
             failureThreshold: 3
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
           terminationMessagePath: /dev/termination-log
           terminationMessagePolicy: File
       restartPolicy: Always

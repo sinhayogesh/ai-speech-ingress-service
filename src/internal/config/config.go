@@ -14,6 +14,7 @@ type Config struct {
 	STTProvider   string // "google" or "mock"
 	Kafka         KafkaConfig
 	SegmentLimits SegmentLimitsConfig
+	Observability ObservabilityConfig
 }
 
 // SegmentLimitsConfig holds safety limits for segment processing.
@@ -41,6 +42,21 @@ type KafkaConfig struct {
 	Principal    string
 }
 
+// ObservabilityConfig holds observability settings.
+type ObservabilityConfig struct {
+	// MetricsPort is the port for the Prometheus metrics HTTP server.
+	MetricsPort string
+
+	// MetricsEnabled enables/disables the metrics server.
+	MetricsEnabled bool
+
+	// LogLevel is the zerolog log level (debug, info, warn, error).
+	LogLevel string
+
+	// LogFormat is the log output format (json, console).
+	LogFormat string
+}
+
 // Default segment limits - safety guardrails
 const (
 	DefaultMaxAudioBytes = 5 * 1024 * 1024 // 5MB (~625 seconds at 8kHz 16-bit mono)
@@ -64,6 +80,12 @@ func Load() *Config {
 			MaxAudioBytes: envOrDefaultInt64("SEGMENT_MAX_AUDIO_BYTES", DefaultMaxAudioBytes),
 			MaxDuration:   envOrDefaultDuration("SEGMENT_MAX_DURATION", DefaultMaxDuration),
 			MaxPartials:   envOrDefaultInt("SEGMENT_MAX_PARTIALS", DefaultMaxPartials),
+		},
+		Observability: ObservabilityConfig{
+			MetricsPort:    envOrDefault("METRICS_PORT", "9090"),
+			MetricsEnabled: envOrDefault("METRICS_ENABLED", "true") == "true",
+			LogLevel:       envOrDefault("LOG_LEVEL", "info"),
+			LogFormat:      envOrDefault("LOG_FORMAT", "json"),
 		},
 	}
 }

@@ -4,11 +4,13 @@ package events
 import (
 	"context"
 	"encoding/json"
-	"log"
 	"net"
 	"time"
 
+	"github.com/rs/zerolog/log"
 	"github.com/segmentio/kafka-go"
+
+	"ai-speech-ingress-service/internal/observability/metrics"
 )
 
 // Publisher publishes transcript events to separate Kafka topics.
@@ -19,6 +21,7 @@ type Publisher struct {
 	topicPartial  string
 	topicFinal    string
 	enabled       bool
+	metrics       *metrics.Metrics
 }
 
 // Config holds Kafka publisher configuration.
@@ -32,13 +35,16 @@ type Config struct {
 
 // New creates a new Kafka event publisher with separate topics for partial and final transcripts.
 func New(cfg *Config) *Publisher {
+	m := metrics.DefaultMetrics
+
 	if cfg == nil || !cfg.Enabled || len(cfg.Brokers) == 0 {
-		log.Println("[PUBLISHER] Kafka disabled, using log-only mode")
+		log.Info().Msg("Kafka disabled, using log-only mode")
 		return &Publisher{
 			principal:    cfg.Principal,
 			topicPartial: cfg.TopicPartial,
 			topicFinal:   cfg.TopicFinal,
 			enabled:      false,
+			metrics:      m,
 		}
 	}
 
@@ -77,8 +83,12 @@ func New(cfg *Config) *Publisher {
 		Transport:    transport,
 	}
 
-	log.Printf("[PUBLISHER] Kafka enabled: brokers=%v topicPartial=%s topicFinal=%s",
-		cfg.Brokers, cfg.TopicPartial, cfg.TopicFinal)
+	log.Info().
+		Strs("brokers", cfg.Brokers).
+		Str("topicPartial", cfg.TopicPartial).
+		Str("topicFinal", cfg.TopicFinal).
+		Str("principal", cfg.Principal).
+		Msg("Kafka publisher initialized")
 
 	return &Publisher{
 		writerPartial: writerPartial,
@@ -87,32 +97,41 @@ func New(cfg *Config) *Publisher {
 		topicPartial:  cfg.TopicPartial,
 		topicFinal:    cfg.TopicFinal,
 		enabled:       true,
+		metrics:       m,
 	}
 }
 
 // PublishPartial publishes a partial transcript event to the partial topic.
 func (p *Publisher) PublishPartial(ctx context.Context, key string, event any) error {
-	return p.publish(ctx, p.writerPartial, p.topicPartial, key, event)
+	return p.publish(ctx, p.writerPartial, p.topicPartial, "partial", key, event)
 }
 
 // PublishFinal publishes a final transcript event to the final topic.
 func (p *Publisher) PublishFinal(ctx context.Context, key string, event any) error {
-	return p.publish(ctx, p.writerFinal, p.topicFinal, key, event)
+	return p.publish(ctx, p.writerFinal, p.topicFinal, "final", key, event)
 }
 
 // publish is the internal method that writes to a specific Kafka writer.
-func (p *Publisher) publish(ctx context.Context, writer *kafka.Writer, topic string, key string, event any) error {
+func (p *Publisher) publish(ctx context.Context, writer *kafka.Writer, topic, eventType, key string, event any) error {
+	start := time.Now()
+
 	payload, err := json.Marshal(event)
 	if err != nil {
-		log.Printf("[PUBLISHER] Failed to marshal event: %v", err)
+		log.Error().Err(err).Str("topic", topic).Msg("Failed to marshal event")
 		return err
 	}
 
 	// Log the event
-	log.Printf("[PUBLISH] principal=%s topic=%s key=%s payload=%s", p.principal, topic, key, payload)
+	log.Debug().
+		Str("principal", p.principal).
+		Str("topic", topic).
+		Str("key", key).
+		RawJSON("payload", payload).
+		Msg("Publishing event")
 
 	// If Kafka is disabled, just log
 	if !p.enabled || writer == nil {
+		p.metrics.RecordKafkaPublish(topic, eventType, nil, time.Since(start).Seconds())
 		return nil
 	}
 
@@ -127,10 +146,16 @@ func (p *Publisher) publish(ctx context.Context, writer *kafka.Writer, topic str
 	}
 
 	if err := writer.WriteMessages(ctx, msg); err != nil {
-		log.Printf("[PUBLISHER] Failed to write to Kafka topic=%s: %v", topic, err)
+		log.Error().
+			Err(err).
+			Str("topic", topic).
+			Str("key", key).
+			Msg("Failed to write to Kafka")
+		p.metrics.RecordKafkaPublish(topic, eventType, err, time.Since(start).Seconds())
 		return err
 	}
 
+	p.metrics.RecordKafkaPublish(topic, eventType, nil, time.Since(start).Seconds())
 	return nil
 }
 
@@ -139,11 +164,13 @@ func (p *Publisher) Close() error {
 	var err error
 	if p.writerPartial != nil {
 		if e := p.writerPartial.Close(); e != nil {
+			log.Error().Err(e).Msg("Error closing partial writer")
 			err = e
 		}
 	}
 	if p.writerFinal != nil {
 		if e := p.writerFinal.Close(); e != nil {
+			log.Error().Err(e).Msg("Error closing final writer")
 			err = e
 		}
 	}
