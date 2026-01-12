@@ -1,0 +1,25 @@
+replicaCount: 1
+
+image:
+  repository: localhost:5000/ai-speech-ingress-service
+  tag: latest
+
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 1
+
+service:
+  type: ClusterIP
+  port: 8080
+
+httpserver:
+  port: 8080
+
+ingress:
+  enabled: true
+  type: istio
+
+env: {}
+
