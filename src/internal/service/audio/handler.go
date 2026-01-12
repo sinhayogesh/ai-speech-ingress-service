@@ -20,15 +20,17 @@ type SegmentTransitionCallback func(newSegmentId string)
 
 // Handler manages an audio transcription session.
 // It implements stt.Callback to receive transcripts and publish events.
-// Supports utterance boundary detection and segment transitions.
+// Uses an explicit segment state machine to enforce lifecycle rules.
 type Handler struct {
 	adapter           stt.Adapter
 	publisher         *events.Publisher
-	segments          *segment.Generator
+	segmentGen        *segment.Generator
 	interactionId     string
 	tenantId          string
-	segmentId         string
 	lastAudioOffsetMs int64
+
+	// Segment lifecycle state machine
+	lifecycle *segment.Lifecycle
 
 	// Segment transition handling
 	mu                  sync.RWMutex
@@ -40,16 +42,16 @@ type Handler struct {
 func NewHandler(
 	adapter stt.Adapter,
 	publisher *events.Publisher,
-	segments *segment.Generator,
+	segmentGen *segment.Generator,
 	interactionId, tenantId, segmentId string,
 ) *Handler {
 	return &Handler{
 		adapter:       adapter,
 		publisher:     publisher,
-		segments:      segments,
+		segmentGen:    segmentGen,
 		interactionId: interactionId,
 		tenantId:      tenantId,
-		segmentId:     segmentId,
+		lifecycle:     segment.NewLifecycle(segmentId),
 	}
 }
 
@@ -74,16 +76,20 @@ func (h *Handler) SendAudio(ctx context.Context, audio []byte, audioOffsetMs int
 	return h.adapter.SendAudio(ctx, audio)
 }
 
-// Close ends the STT session.
+// Close ends the STT session and closes the current segment.
 func (h *Handler) Close() error {
+	h.lifecycle.Close()
 	return h.adapter.Close()
 }
 
 // GetSegmentId returns the current segment ID.
 func (h *Handler) GetSegmentId() string {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	return h.segmentId
+	return h.lifecycle.SegmentId()
+}
+
+// GetSegmentState returns the current segment lifecycle state.
+func (h *Handler) GetSegmentState() segment.State {
+	return h.lifecycle.State()
 }
 
 // GetUtteranceCount returns the number of utterances processed.
@@ -96,16 +102,20 @@ func (h *Handler) GetUtteranceCount() int {
 // --- stt.Callback implementation ---
 
 // OnPartial is called when an interim transcript is received.
+// Only emits if segment is in OPEN state.
 func (h *Handler) OnPartial(text string) {
-	h.mu.RLock()
-	segmentId := h.segmentId
-	h.mu.RUnlock()
+	// Validate state transition
+	if err := h.lifecycle.EmitPartial(); err != nil {
+		log.Printf("OnPartial ignored: segmentId=%s state=%s err=%v",
+			h.lifecycle.SegmentId(), h.lifecycle.State(), err)
+		return
+	}
 
 	ev := models.TranscriptPartial{
 		EventType:     "interaction.transcript.partial",
 		InteractionID: h.interactionId,
 		TenantID:      h.tenantId,
-		SegmentID:     segmentId,
+		SegmentID:     h.lifecycle.SegmentId(),
 		Text:          text,
 		Timestamp:     time.Now().UnixMilli(),
 	}
@@ -113,17 +123,24 @@ func (h *Handler) OnPartial(text string) {
 }
 
 // OnFinal is called when a final transcript is received.
+// Only emits once per segment, transitions to FINAL_EMITTED state.
 func (h *Handler) OnFinal(text string, confidence float64) {
-	h.mu.Lock()
-	segmentId := h.segmentId
+	// Validate state transition - this also transitions to FINAL_EMITTED
+	if err := h.lifecycle.EmitFinal(); err != nil {
+		log.Printf("OnFinal ignored: segmentId=%s state=%s err=%v",
+			h.lifecycle.SegmentId(), h.lifecycle.State(), err)
+		return
+	}
+
+	h.mu.RLock()
 	audioOffsetMs := h.lastAudioOffsetMs
-	h.mu.Unlock()
+	h.mu.RUnlock()
 
 	ev := models.TranscriptFinal{
 		EventType:     "interaction.transcript.final",
 		InteractionID: h.interactionId,
 		TenantID:      h.tenantId,
-		SegmentID:     segmentId,
+		SegmentID:     h.lifecycle.SegmentId(),
 		Text:          text,
 		Confidence:    confidence,
 		AudioOffsetMs: audioOffsetMs,
@@ -134,22 +151,31 @@ func (h *Handler) OnFinal(text string, confidence float64) {
 
 // OnEndOfUtterance is called when the STT provider detects end of speech.
 // This signals the boundary between utterances within a conversation.
-// The handler transitions to a new segment for subsequent speech.
+// The handler closes the current segment and creates a new one.
 func (h *Handler) OnEndOfUtterance() {
-	h.mu.Lock()
-	oldSegmentId := h.segmentId
-	h.utteranceCount++
+	oldSegmentId := h.lifecycle.SegmentId()
+	oldState := h.lifecycle.State()
 
-	// Generate new segment ID for the next utterance
-	if h.segments != nil {
-		h.segmentId = h.segments.Next(h.interactionId)
+	// Close current segment
+	h.lifecycle.Close()
+
+	// Generate new segment ID and reset lifecycle
+	h.mu.Lock()
+	h.utteranceCount++
+	var newSegmentId string
+	if h.segmentGen != nil {
+		newSegmentId = h.segmentGen.Next(h.interactionId)
+	} else {
+		newSegmentId = oldSegmentId + "-next"
 	}
-	newSegmentId := h.segmentId
 	cb := h.onSegmentTransition
 	h.mu.Unlock()
 
-	log.Printf("End of utterance detected: interactionId=%s oldSegment=%s newSegment=%s utterance=#%d",
-		h.interactionId, oldSegmentId, newSegmentId, h.utteranceCount)
+	// Reset lifecycle for new segment
+	h.lifecycle.Reset(newSegmentId)
+
+	log.Printf("End of utterance: interactionId=%s oldSegment=%s (state=%s) newSegment=%s utterance=#%d",
+		h.interactionId, oldSegmentId, oldState, newSegmentId, h.utteranceCount)
 
 	// Notify server of segment transition if callback is set
 	if cb != nil {
@@ -159,18 +185,20 @@ func (h *Handler) OnEndOfUtterance() {
 
 // OnError is called when an STT error occurs.
 func (h *Handler) OnError(err error) {
-	h.mu.RLock()
-	segmentId := h.segmentId
-	h.mu.RUnlock()
-	log.Printf("STT error: interactionId=%s segmentId=%s err=%v", h.interactionId, segmentId, err)
+	log.Printf("STT error: interactionId=%s segmentId=%s state=%s err=%v",
+		h.interactionId, h.lifecycle.SegmentId(), h.lifecycle.State(), err)
 }
 
 func (h *Handler) publishPartial(ev models.TranscriptPartial) {
 	ctx := context.Background()
-	h.publisher.PublishPartial(ctx, h.interactionId, ev)
+	if err := h.publisher.PublishPartial(ctx, h.interactionId, ev); err != nil {
+		log.Printf("Failed to publish partial: segmentId=%s err=%v", ev.SegmentID, err)
+	}
 }
 
 func (h *Handler) publishFinal(ev models.TranscriptFinal) {
 	ctx := context.Background()
-	h.publisher.PublishFinal(ctx, h.interactionId, ev)
+	if err := h.publisher.PublishFinal(ctx, h.interactionId, ev); err != nil {
+		log.Printf("Failed to publish final: segmentId=%s err=%v", ev.SegmentID, err)
+	}
 }
