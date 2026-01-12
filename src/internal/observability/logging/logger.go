@@ -93,4 +93,3 @@ func WithComponent(component string) zerolog.Logger {
 		Str("component", component).
 		Logger()
 }
-

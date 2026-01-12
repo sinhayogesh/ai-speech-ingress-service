@@ -62,4 +62,3 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	log.Info().Msg("Shutting down observability HTTP server")
 	return s.server.Shutdown(ctx)
 }
-

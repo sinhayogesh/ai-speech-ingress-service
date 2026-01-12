@@ -36,11 +36,11 @@ type Metrics struct {
 	KafkaPublishLatency *prometheus.HistogramVec
 
 	// STT metrics
-	STTLatency         *prometheus.HistogramVec
-	STTErrors          *prometheus.CounterVec
-	STTUtteranceCount  prometheus.Counter
-	STTPartialLatency  prometheus.Histogram
-	STTFinalLatency    prometheus.Histogram
+	STTLatency        *prometheus.HistogramVec
+	STTErrors         *prometheus.CounterVec
+	STTUtteranceCount prometheus.Counter
+	STTPartialLatency prometheus.Histogram
+	STTFinalLatency   prometheus.Histogram
 
 	// Backpressure metrics
 	SegmentLimitExceeded *prometheus.CounterVec
@@ -249,4 +249,3 @@ func (m *Metrics) RecordUtterance() {
 func (m *Metrics) RecordLimitExceeded(limitType string) {
 	m.SegmentLimitExceeded.WithLabelValues(limitType).Inc()
 }
-
