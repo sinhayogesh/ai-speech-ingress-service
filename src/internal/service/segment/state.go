@@ -15,8 +15,11 @@ const (
 	StateOpen State = iota
 	// StateFinalEmitted - Final transcript emitted, waiting to close.
 	StateFinalEmitted
-	// StateClosed - Segment is closed, ignore all events.
+	// StateClosed - Segment is closed normally.
 	StateClosed
+	// StateDropped - Segment was dropped due to error (no final emitted).
+	// This is a terminal state. "Silence > bad data"
+	StateDropped
 )
 
 // String returns the string representation of the state.
@@ -28,15 +31,22 @@ func (s State) String() string {
 		return "FINAL_EMITTED"
 	case StateClosed:
 		return "CLOSED"
+	case StateDropped:
+		return "DROPPED"
 	default:
 		return fmt.Sprintf("UNKNOWN(%d)", s)
 	}
 }
 
+// IsTerminal returns true if the state is terminal (CLOSED or DROPPED).
+func (s State) IsTerminal() bool {
+	return s == StateClosed || s == StateDropped
+}
+
 // Errors for invalid state transitions.
 var (
-	ErrSegmentClosed          = errors.New("segment is closed")
-	ErrFinalAlreadyEmitted    = errors.New("final already emitted for this segment")
+	ErrSegmentClosed               = errors.New("segment is closed")
+	ErrFinalAlreadyEmitted         = errors.New("final already emitted for this segment")
 	ErrCannotEmitPartialAfterFinal = errors.New("cannot emit partial after final")
 )
 
@@ -97,11 +107,18 @@ func (l *Lifecycle) CanEmitFinal() bool {
 	return l.state == StateOpen
 }
 
-// IsClosed returns true if the segment is closed.
+// IsClosed returns true if the segment is in a terminal state (closed or dropped).
 func (l *Lifecycle) IsClosed() bool {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-	return l.state == StateClosed
+	return l.state.IsTerminal()
+}
+
+// IsDropped returns true if the segment was dropped due to error.
+func (l *Lifecycle) IsDropped() bool {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.state == StateDropped
 }
 
 // EmitPartial validates and records a partial emission.
@@ -116,7 +133,7 @@ func (l *Lifecycle) EmitPartial() error {
 		return nil
 	case StateFinalEmitted:
 		return ErrCannotEmitPartialAfterFinal
-	case StateClosed:
+	case StateClosed, StateDropped:
 		return ErrSegmentClosed
 	default:
 		return fmt.Errorf("unexpected state: %v", l.state)
@@ -136,7 +153,7 @@ func (l *Lifecycle) EmitFinal() error {
 		return nil
 	case StateFinalEmitted:
 		return ErrFinalAlreadyEmitted
-	case StateClosed:
+	case StateClosed, StateDropped:
 		return ErrSegmentClosed
 	default:
 		return fmt.Errorf("unexpected state: %v", l.state)
@@ -151,6 +168,27 @@ func (l *Lifecycle) Close() {
 	l.state = StateClosed
 }
 
+// Drop transitions the segment to DROPPED state.
+// Use when an error occurs and the segment should be abandoned without emitting a final.
+// "Silence > bad data" - it's better to emit nothing than incorrect/incomplete data.
+//
+// Scenarios:
+//   - STT error mid-utterance
+//   - gRPC client disconnect
+//   - Network hiccups / stream resets
+//   - Partial stream that never received a final
+//
+// Returns true if the segment was dropped, false if already in a terminal state.
+func (l *Lifecycle) Drop() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.state.IsTerminal() {
+		return false // Already in terminal state
+	}
+	l.state = StateDropped
+	return true
+}
+
 // Reset resets the lifecycle to OPEN state with a new segment ID.
 // Used when transitioning to a new segment after OnEndOfUtterance.
 func (l *Lifecycle) Reset(newSegmentId string) {
@@ -159,4 +197,3 @@ func (l *Lifecycle) Reset(newSegmentId string) {
 	l.segmentId = newSegmentId
 	l.state = StateOpen
 }
-

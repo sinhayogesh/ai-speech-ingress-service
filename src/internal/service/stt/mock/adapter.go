@@ -53,14 +53,14 @@ var DefaultUtterances = []SimulatedUtterance{
 // - Exactly one final transcript when utterance ends
 // - End-of-utterance detection after final transcript
 type Adapter struct {
-	cb                  stt.Callback
-	mu                  sync.Mutex
-	audioReceived       int                // Count of audio frames received
-	utterance           SimulatedUtterance // Current utterance being simulated
-	partialIndex        int                // Next partial to send
-	finalSent           bool               // Ensures only one final per utterance
-	endOfUtteranceSent  bool               // Ensures only one end-of-utterance per utterance
-	closed              bool
+	cb                 stt.Callback
+	mu                 sync.Mutex
+	audioReceived      int                // Count of audio frames received
+	utterance          SimulatedUtterance // Current utterance being simulated
+	partialIndex       int                // Next partial to send
+	finalSent          bool               // Ensures only one final per utterance
+	endOfUtteranceSent bool               // Ensures only one end-of-utterance per utterance
+	closed             bool
 }
 
 // utteranceCounter tracks which utterance to use next (cycles through defaults)

@@ -149,4 +149,3 @@ func (p *Publisher) Close() error {
 	}
 	return err
 }
-

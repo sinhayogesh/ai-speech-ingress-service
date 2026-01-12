@@ -96,17 +96,19 @@ type Callback interface {
 │   │   OPEN   │──────────────────▶│ FINAL_EMITTED  │           │
 │   └──────────┘                   └────────────────┘           │
 │        │                                │                      │
-│        │ EmitPartial()                  │                      │
-│        │ (multiple)                     │                      │
-│        ▼                                │                      │
-│   [emit partial]                        │                      │
-│                                         │                      │
-│        │                                │                      │
-│        │ Close()                        │ Close()              │
-│        ▼                                ▼                      │
+│        │ EmitPartial()                  │ Close()              │
+│        │ (multiple)                     ▼                      │
+│        ▼                         ┌──────────────┐             │
+│   [emit partial]                 │    CLOSED    │             │
+│        │                         │   (normal)   │             │
+│        │                         └──────────────┘             │
+│        │ Drop()                                               │
+│        │ (error)                                              │
+│        ▼                                                      │
 │   ┌──────────────────────────────────────────┐                │
-│   │                 CLOSED                    │                │
-│   │         (ignore all events)               │                │
+│   │               DROPPED                     │                │
+│   │    (error - no final emitted)             │                │
+│   │    "Silence > bad data"                   │                │
 │   └──────────────────────────────────────────┘                │
 │                                                                │
 └────────────────────────────────────────────────────────────────┘
@@ -118,12 +120,16 @@ type Callback interface {
 |-------|-----------------|----------------|-------------|
 | `OPEN` | ✅ Yes (multiple) | ✅ Yes (once) | Active segment |
 | `FINAL_EMITTED` | ❌ No | ❌ No | Final sent, waiting to close |
-| `CLOSED` | ❌ No | ❌ No | Segment complete, ignore events |
+| `CLOSED` | ❌ No | ❌ No | Segment complete (normal) |
+| `DROPPED` | ❌ No | ❌ No | Segment abandoned (error) |
+
+**Terminal states:** `CLOSED` and `DROPPED` are both terminal - no further operations allowed.
 
 **Rules enforced:**
 - Partials only in OPEN state
 - Final only once (OPEN → FINAL_EMITTED)
-- No events after CLOSED
+- No events after CLOSED or DROPPED
+- Drop() can be called from any non-terminal state
 - Thread-safe via mutex
 
 **Code:**
@@ -259,16 +265,76 @@ All messages keyed by `interactionId` for:
 
 ## Error Handling
 
-### STT Errors
+### Design Principle: "Silence > Bad Data"
+
+When errors occur, we prefer to emit **nothing** rather than potentially incorrect or incomplete data. This ensures downstream consumers never receive corrupted transcripts.
+
+### Stream Error Scenarios
+
+| Scenario | Behavior | Result |
+|----------|----------|--------|
+| **STT error mid-utterance** | Drop segment | No final emitted |
+| **gRPC client disconnect** | Drop segment | No final emitted |
+| **Network hiccups** | Drop segment | No final emitted |
+| **Partial stream without final** | Drop segment | Partials orphaned |
+| **Context cancelled** | Drop segment | No final emitted |
+
+### Segment Drop Behavior
+
+When `Drop()` is called:
+1. Segment transitions to `DROPPED` state
+2. No final transcript is emitted
+3. Any pending partials are orphaned (consumers should handle)
+4. Detailed log entry with:
+   - `interactionId`
+   - `segmentId`
+   - Previous state
+   - Drop reason
 
 ```go
 func (h *Handler) OnError(err error) {
-    log.Printf("STT error: interactionId=%s segmentId=%s err=%v", 
-        h.interactionId, h.segmentId, err)
+    // Drop the segment - no final will be emitted
+    dropped := h.lifecycle.Drop()
+    log.Printf("STT error - segment DROPPED: interactionId=%s segmentId=%s dropped=%v err=%v",
+        h.interactionId, h.lifecycle.SegmentId(), dropped, err)
 }
 ```
 
-Current: Log only. Future: Publish error event, retry logic.
+### gRPC Error Classification
+
+Stream errors are classified for better observability:
+
+| gRPC Code | Classification |
+|-----------|---------------|
+| `Canceled` | Client disconnect |
+| `DeadlineExceeded` | Timeout |
+| `Unavailable` | Network error |
+| `ResourceExhausted` | Rate limiting |
+| `Internal` | Server error |
+| EOF | Unexpected close |
+
+```go
+func classifyStreamError(err error) string {
+    if st, ok := status.FromError(err); ok {
+        switch st.Code() {
+        case codes.Canceled:
+            return "client disconnect (gRPC canceled)"
+        case codes.Unavailable:
+            return "network error (unavailable)"
+        // ... more cases
+        }
+    }
+    return "stream error: " + err.Error()
+}
+```
+
+### Recovery Strategy
+
+After a segment is dropped, the stream can continue:
+- For single-utterance mode: Stream typically ends
+- For continuous mode: New segment starts fresh
+
+**No retry on drop** - The audio data is ephemeral; retrying would require client re-send.
 
 ### Kafka Errors
 

@@ -184,9 +184,44 @@ func (h *Handler) OnEndOfUtterance() {
 }
 
 // OnError is called when an STT error occurs.
+// The current segment is DROPPED - no final will be emitted.
+// "Silence > bad data" - it's better to emit nothing than incorrect/incomplete data.
+//
+// This handles:
+//   - STT error mid-utterance
+//   - Network hiccups / stream resets
+//   - Partial stream without final
 func (h *Handler) OnError(err error) {
-	log.Printf("STT error: interactionId=%s segmentId=%s state=%s err=%v",
-		h.interactionId, h.lifecycle.SegmentId(), h.lifecycle.State(), err)
+	segmentId := h.lifecycle.SegmentId()
+	oldState := h.lifecycle.State()
+
+	// Drop the segment - no final will be emitted
+	dropped := h.lifecycle.Drop()
+
+	log.Printf("STT error - segment DROPPED: interactionId=%s segmentId=%s previousState=%s dropped=%v err=%v",
+		h.interactionId, segmentId, oldState, dropped, err)
+}
+
+// DropSegment explicitly drops the current segment without emitting a final.
+// Use when the segment should be abandoned due to external factors
+// (e.g., gRPC client disconnect, timeout, validation failure).
+//
+// Returns true if the segment was dropped, false if already in a terminal state.
+func (h *Handler) DropSegment(reason string) bool {
+	segmentId := h.lifecycle.SegmentId()
+	oldState := h.lifecycle.State()
+
+	dropped := h.lifecycle.Drop()
+
+	log.Printf("Segment DROPPED: interactionId=%s segmentId=%s previousState=%s reason=%s",
+		h.interactionId, segmentId, oldState, reason)
+
+	return dropped
+}
+
+// IsSegmentDropped returns true if the current segment was dropped.
+func (h *Handler) IsSegmentDropped() bool {
+	return h.lifecycle.IsDropped()
 }
 
 func (h *Handler) publishPartial(ev models.TranscriptPartial) {
