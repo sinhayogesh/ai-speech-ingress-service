@@ -189,4 +189,3 @@ func TestState_String(t *testing.T) {
 		}
 	}
 }
-

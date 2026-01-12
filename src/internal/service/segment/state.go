@@ -35,8 +35,8 @@ func (s State) String() string {
 
 // Errors for invalid state transitions.
 var (
-	ErrSegmentClosed          = errors.New("segment is closed")
-	ErrFinalAlreadyEmitted    = errors.New("final already emitted for this segment")
+	ErrSegmentClosed               = errors.New("segment is closed")
+	ErrFinalAlreadyEmitted         = errors.New("final already emitted for this segment")
 	ErrCannotEmitPartialAfterFinal = errors.New("cannot emit partial after final")
 )
 
@@ -159,4 +159,3 @@ func (l *Lifecycle) Reset(newSegmentId string) {
 	l.segmentId = newSegmentId
 	l.state = StateOpen
 }
-
