@@ -161,23 +161,52 @@ make test-client
 
 ## Configuration
 
+All configuration is via environment variables with safe defaults. No dynamic reloads.
+
+### Service Identity & Runtime
+
 | Environment Variable | Description | Default |
 |---------------------|-------------|---------|
+| `SERVICE_PRINCIPAL` | Service identity for auth/authorization | `svc-speech-ingress` |
 | `GRPC_PORT` | gRPC server port | `50051` |
+| `LOG_LEVEL` | Log level (`debug`, `info`, `warn`, `error`) | `info` |
+| `LOG_FORMAT` | Log format (`json`, `console`) | `json` |
+
+### STT Parameters
+
+| Environment Variable | Description | Default |
+|---------------------|-------------|---------|
 | `STT_PROVIDER` | STT provider (`mock`, `google`) | `mock` |
+| `STT_LANGUAGE_CODE` | BCP-47 language code | `en-US` |
+| `STT_SAMPLE_RATE_HZ` | Audio sample rate in Hertz | `8000` |
+| `STT_INTERIM_RESULTS` | Enable partial/interim transcripts | `true` |
+| `STT_AUDIO_ENCODING` | Audio encoding (`LINEAR16`, `MULAW`, `FLAC`, etc.) | `LINEAR16` |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to Google Cloud service account JSON | - |
+
+### Segment Guardrails (Backpressure)
+
+| Environment Variable | Description | Default |
+|---------------------|-------------|---------|
+| `SEGMENT_MAX_AUDIO_BYTES` | Max audio bytes per segment | `5242880` (5MB) |
+| `SEGMENT_MAX_DURATION` | Max segment duration | `5m` |
+| `SEGMENT_MAX_PARTIALS` | Max partials per segment | `500` |
+
+### Kafka
+
+| Environment Variable | Description | Default |
+|---------------------|-------------|---------|
 | `KAFKA_ENABLED` | Enable Kafka publishing | `false` |
 | `KAFKA_BROKERS` | Comma-separated Kafka broker addresses | `localhost:9092` |
 | `KAFKA_TOPIC_PARTIAL` | Kafka topic for partial transcript events | `interaction.transcript.partial` |
 | `KAFKA_TOPIC_FINAL` | Kafka topic for final transcript events | `interaction.transcript.final` |
 | `KAFKA_PRINCIPAL` | Principal name for event headers | `svc-speech-ingress` |
+
+### Observability
+
+| Environment Variable | Description | Default |
+|---------------------|-------------|---------|
 | `METRICS_ENABLED` | Enable Prometheus metrics endpoint | `true` |
 | `METRICS_PORT` | HTTP port for metrics server | `9090` |
-| `LOG_LEVEL` | Log level (`debug`, `info`, `warn`, `error`) | `info` |
-| `LOG_FORMAT` | Log format (`json`, `console`) | `json` |
-| `SEGMENT_MAX_AUDIO_BYTES` | Max audio bytes per segment (backpressure) | `5242880` (5MB) |
-| `SEGMENT_MAX_DURATION` | Max segment duration (backpressure) | `5m` |
-| `SEGMENT_MAX_PARTIALS` | Max partials per segment (backpressure) | `500` |
 
 ### STT Provider Selection
 
