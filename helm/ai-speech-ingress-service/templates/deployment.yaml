@@ -19,29 +19,38 @@ spec:
         - name: {{ .Release.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           ports:
-            - name: http
-              containerPort: {{ .Values.httpserver.port }}
+            - name: grpc
+              containerPort: {{ .Values.grpc.port }}
               protocol: TCP
           env:
+            - name: GRPC_PORT
+              value: "{{ .Values.grpc.port }}"
+            - name: KAFKA_ENABLED
+              value: "{{ .Values.kafka.enabled }}"
+            - name: KAFKA_BROKERS
+              value: "{{ .Values.kafka.brokers }}"
+            - name: KAFKA_TOPIC_PARTIAL
+              value: "{{ .Values.kafka.topicPartial }}"
+            - name: KAFKA_TOPIC_FINAL
+              value: "{{ .Values.kafka.topicFinal }}"
+            - name: KAFKA_PRINCIPAL
+              value: "{{ .Values.kafka.principal }}"
             {{- range $key, $value := .Values.env }}
             - name: {{ $key }}
               value: "{{ $value }}"
             {{- end }}
           livenessProbe:
-            httpGet:
-              path: /v1/liveness
-              port: {{ .Values.httpserver.port }}
-              scheme: HTTP
+            grpc:
+              port: {{ .Values.grpc.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
           readinessProbe:
-            httpGet:
-              path: /v1/readiness
-              port: {{ .Values.httpserver.port }}
-              scheme: HTTP
-            initialDelaySeconds: 10
-            timeoutSeconds: 1
+            grpc:
+              port: {{ .Values.grpc.port }}
+            initialDelaySeconds: 5
             periodSeconds: 5
             successThreshold: 1
-            failureThreshold: 5
+            failureThreshold: 3
           terminationMessagePath: /dev/termination-log
           terminationMessagePolicy: File
       restartPolicy: Always
@@ -54,4 +63,3 @@ spec:
       maxSurge: {{ .Values.strategy.rollingUpdate.maxSurge }}
   revisionHistoryLimit: 3
   progressDeadlineSeconds: 600
-
