@@ -3,10 +3,13 @@ package grpcapi
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"ai-speech-ingress-service/internal/events"
 	"ai-speech-ingress-service/internal/schema"
@@ -92,17 +95,33 @@ func (s *Server) StreamAudio(stream pb.AudioStreamService_StreamAudioServer) err
 	for {
 		frame, err := stream.Recv()
 		if err == io.EOF {
+			// Normal end of stream
 			break
 		}
 		if err != nil {
-			log.Printf("Stream recv error: %v", err)
-			return err
+			// Handle client disconnect or stream errors
+			// "Silence > bad data" - drop the segment, emit no final
+			handler.DropSegment(classifyStreamError(err))
+			log.Printf("Stream error (segment dropped): interactionId=%s segmentId=%s err=%v",
+				interactionId, handler.GetSegmentId(), err)
+			// Return nil to avoid double-logging; segment is already dropped
+			return nil
+		}
+
+		// Check for context cancellation (client disconnect)
+		if ctx.Err() != nil {
+			handler.DropSegment("context cancelled: " + ctx.Err().Error())
+			log.Printf("Context cancelled (segment dropped): interactionId=%s segmentId=%s err=%v",
+				interactionId, handler.GetSegmentId(), ctx.Err())
+			return nil
 		}
 
 		if len(frame.Audio) > 0 {
 			if err := handler.SendAudio(ctx, frame.Audio, frame.AudioOffsetMs); err != nil {
-				log.Printf("Failed to send audio: %v", err)
-				return err
+				handler.DropSegment("send audio failed: " + err.Error())
+				log.Printf("Failed to send audio (segment dropped): interactionId=%s segmentId=%s err=%v",
+					interactionId, handler.GetSegmentId(), err)
+				return nil
 			}
 		}
 
@@ -111,8 +130,15 @@ func (s *Server) StreamAudio(stream pb.AudioStreamService_StreamAudioServer) err
 		}
 	}
 
-	log.Printf("Stream completed: interactionId=%s segmentId=%s utterances=%d",
-		interactionId, handler.GetSegmentId(), handler.GetUtteranceCount())
+	// Log final state
+	finalState := handler.GetSegmentState()
+	if handler.IsSegmentDropped() {
+		log.Printf("Stream ended with DROPPED segment: interactionId=%s segmentId=%s state=%s",
+			interactionId, handler.GetSegmentId(), finalState)
+	} else {
+		log.Printf("Stream completed: interactionId=%s segmentId=%s state=%s utterances=%d",
+			interactionId, handler.GetSegmentId(), finalState, handler.GetUtteranceCount())
+	}
 
 	return stream.SendAndClose(&pb.StreamAck{InteractionId: interactionId})
 }
@@ -128,4 +154,45 @@ func (s *Server) createSTTAdapter(ctx context.Context) (stt.Adapter, error) {
 		log.Printf("Unknown STT provider '%s', using mock", s.sttProvider)
 		return mock.New(), nil
 	}
+}
+
+// classifyStreamError returns a human-readable reason for stream errors.
+// Used for logging when dropping segments due to stream failures.
+func classifyStreamError(err error) string {
+	if err == nil {
+		return "unknown"
+	}
+
+	// Check for context errors
+	if errors.Is(err, context.Canceled) {
+		return "client disconnect (context canceled)"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "timeout (deadline exceeded)"
+	}
+
+	// Check for gRPC status codes
+	if st, ok := status.FromError(err); ok {
+		switch st.Code() {
+		case codes.Canceled:
+			return "client disconnect (gRPC canceled)"
+		case codes.DeadlineExceeded:
+			return "timeout (gRPC deadline exceeded)"
+		case codes.Unavailable:
+			return "network error (unavailable)"
+		case codes.ResourceExhausted:
+			return "resource exhausted"
+		case codes.Internal:
+			return "internal error"
+		default:
+			return "gRPC error: " + st.Code().String()
+		}
+	}
+
+	// Check for EOF (unexpected connection close)
+	if errors.Is(err, io.EOF) || err.Error() == "EOF" {
+		return "unexpected connection close (EOF)"
+	}
+
+	return "stream error: " + err.Error()
 }
