@@ -111,7 +111,8 @@ ai-speech-ingress-service/
 ├── src/
 │   ├── cmd/
 │   │   ├── main.go             # Service entry point
-│   │   └── testclient/         # gRPC test client
+│   │   ├── audioclient/        # Real audio streaming client
+│   │   └── testclient/         # Simple gRPC test client
 │   ├── internal/
 │   │   ├── api/grpc/           # gRPC server (StreamAudio)
 │   │   ├── config/             # Environment configuration
@@ -129,6 +130,8 @@ ai-speech-ingress-service/
 │   │           ├── google/     # Google Cloud STT adapter
 │   │           └── mock/       # Mock adapter for testing
 │   └── proto/                  # Generated protobuf code
+├── testdata/
+│   └── sample-8khz.wav         # Sample audio for testing (8kHz 16-bit mono)
 ├── Makefile
 ├── Tiltfile
 └── README.md
@@ -152,12 +155,24 @@ export GOOGLE_APPLICATION_CREDENTIALS=/path/to/service-account.json
 make run
 ```
 
-### Test with Client
+### Test with Mock Client
 
 ```bash
-# In another terminal
+# In another terminal (sends fake audio, works with mock STT)
 make test-client
 ```
+
+### Test with Real Audio
+
+```bash
+# Stream a real WAV file to Google STT
+go run ./cmd/audioclient -audio=testdata/sample-8khz.wav
+
+# With custom server address
+go run ./cmd/audioclient -audio=/path/to/audio.wav -server=localhost:50051
+```
+
+The audio client streams WAV files in real-time (100ms chunks) and works with both mock and Google STT providers. Audio must be **16-bit PCM, mono, 8kHz** (telephony standard).
 
 ## Configuration
 
@@ -434,7 +449,8 @@ curl http://localhost:9090/healthz
 | Target | Description |
 |--------|-------------|
 | `make run` | Run the service locally |
-| `make test-client` | Run the test gRPC client |
+| `make test-client` | Run the simple test gRPC client |
+| `make audio-test` | Stream real audio file to service |
 | `make build` | Build the service binary |
 | `make proto` | Generate protobuf code |
 | `make proto-install` | Install protoc plugins |
