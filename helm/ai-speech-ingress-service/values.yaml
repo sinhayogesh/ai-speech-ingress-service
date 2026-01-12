@@ -12,14 +12,19 @@ strategy:
 
 service:
   type: ClusterIP
-  port: 8080
+  port: 50051
 
-httpserver:
-  port: 8080
+grpc:
+  port: 50051
 
 ingress:
   enabled: true
   type: istio
 
-env: {}
+kafka:
+  enabled: true
+  brokers: "k3a-kafka.infra.svc.cluster.local:9092"
+  topic: "interaction.transcripts"
+  principal: "svc-speech-ingress"
 
+env: {}
