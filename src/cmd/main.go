@@ -8,13 +8,26 @@ import (
 	"syscall"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/reflection"
 
 	grpcapi "ai-speech-ingress-service/internal/api/grpc"
 	"ai-speech-ingress-service/internal/config"
+	"ai-speech-ingress-service/internal/events"
 )
 
 func main() {
 	cfg := config.Load()
+
+	// Create Kafka publisher
+	publisher := events.New(&events.Config{
+		Enabled:   cfg.Kafka.Enabled,
+		Brokers:   cfg.Kafka.Brokers,
+		Topic:     cfg.Kafka.Topic,
+		Principal: cfg.Kafka.Principal,
+	})
+	defer publisher.Close()
 
 	lis, err := net.Listen("tcp", ":"+cfg.Port)
 	if err != nil {
@@ -22,7 +35,18 @@ func main() {
 	}
 
 	server := grpc.NewServer()
-	grpcapi.Register(server)
+
+	// Register gRPC health check service
+	healthServer := health.NewServer()
+	grpc_health_v1.RegisterHealthServer(server, healthServer)
+	healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+	healthServer.SetServingStatus("ai.speech.ingress.AudioStreamService", grpc_health_v1.HealthCheckResponse_SERVING)
+
+	// Register application services
+	grpcapi.Register(server, publisher, cfg.STTProvider)
+
+	// Enable gRPC reflection for debugging tools like grpcurl
+	reflection.Register(server)
 
 	go func() {
 		log.Printf("Speech Ingress Service started on :%s", cfg.Port)
@@ -36,5 +60,6 @@ func main() {
 	<-sig
 
 	log.Println("shutting down gRPC server")
+	healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
 	server.GracefulStop()
 }
