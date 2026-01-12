@@ -1,52 +1,130 @@
 # AI Speech Ingress Service
 
-A Go gRPC service for real-time speech-to-text transcription. It receives audio streams, forwards them to an STT provider (Google Cloud Speech-to-Text), and publishes transcript events.
+A Go gRPC service for real-time speech-to-text transcription. It receives audio streams via gRPC, forwards them to configurable STT providers, detects utterance boundaries, and publishes transcript events to Kafka.
+
+## Features
+
+- **Real-time streaming** - Bidirectional gRPC for low-latency audio processing
+- **Multi-provider STT** - Pluggable adapters (Google, Mock; Azure planned)
+- **Utterance boundary detection** - Automatic segment transitions on speech pauses
+- **Separate Kafka topics** - Infrastructure-level access control for partials vs finals
+- **Kubernetes-native** - Helm charts, health probes, graceful shutdown
 
 ## Architecture
 
 ```
-┌─────────────────┐     ┌─────────────────────┐     ┌─────────────────┐
-│   gRPC Client   │────▶│ AI Speech Ingress   │────▶│  Google STT     │
-│  (Audio Stream) │     │      Service        │     │                 │
-└─────────────────┘     └─────────────────────┘     └─────────────────┘
-                                │
-                                ▼
-                        ┌─────────────────┐
-                        │  Event Publisher │
-                        │  (Kafka/NATS)    │
-                        └─────────────────┘
+                                    ┌─────────────────────────────────────────┐
+                                    │       AI Speech Ingress Service         │
+                                    │                                         │
+┌──────────────┐    gRPC Stream     │  ┌─────────────┐    ┌───────────────┐  │
+│  Telephony   │───────────────────▶│  │   Audio     │───▶│  STT Adapter  │  │
+│   Gateway    │   AudioFrame[]     │  │  Handler    │    │  (Google/Mock)│  │
+└──────────────┘                    │  └─────────────┘    └───────────────┘  │
+                                    │         │                   │           │
+                                    │         │ OnPartial()       │           │
+                                    │         │ OnFinal()         │           │
+                                    │         │ OnEndOfUtterance()│           │
+                                    │         ▼                   │           │
+                                    │  ┌─────────────┐            │           │
+                                    │  │  Segment    │◀───────────┘           │
+                                    │  │  Generator  │                        │
+                                    │  └─────────────┘                        │
+                                    │         │                               │
+                                    │         ▼                               │
+                                    │  ┌─────────────┐                        │
+                                    │  │  Publisher  │                        │
+                                    │  └─────────────┘                        │
+                                    └─────────┬───────────────────────────────┘
+                                              │
+                         ┌────────────────────┴────────────────────┐
+                         │                                         │
+                         ▼                                         ▼
+              ┌─────────────────────┐                 ┌─────────────────────┐
+              │ interaction.        │                 │ interaction.        │
+              │ transcript.partial  │                 │ transcript.final    │
+              │     (Kafka)         │                 │     (Kafka)         │
+              └─────────────────────┘                 └─────────────────────┘
 ```
+
+## Component Design
+
+### STT Adapter Interface
+
+```go
+type Callback interface {
+    OnPartial(text string)                    // Interim transcription result
+    OnFinal(text string, confidence float64)  // Final confirmed result
+    OnEndOfUtterance()                        // Speaker stopped talking
+    OnError(err error)                        // Transcription error
+}
+
+type Adapter interface {
+    Start(ctx context.Context, cb Callback) error  // Begin session
+    SendAudio(ctx context.Context, audio []byte) error  // Stream audio
+    Close() error  // End session
+}
+```
+
+### Supported Providers
+
+| Provider | Status | Notes |
+|----------|--------|-------|
+| **Mock** | ✅ Ready | Simulates realistic transcription for testing |
+| **Google STT** | ✅ Ready | Uses `SingleUtterance` mode for boundary detection |
+| **Azure STT** | 🔜 Planned | Future implementation |
+| **AWS Transcribe** | 🔜 Planned | Future implementation |
+
+### Audio Handler
+
+Coordinates between STT adapter and event publishing:
+- Implements `stt.Callback` to receive transcripts
+- Manages segment lifecycle (create, transition, finalize)
+- Publishes events to appropriate Kafka topics
+
+### Segment Generator
+
+Thread-safe generator for unique segment IDs:
+- Format: `{interactionId}-seg-{n}`
+- Atomic counter ensures uniqueness
+- Resets per interaction
+
+> 📖 **For detailed technical documentation, see [docs/DESIGN.md](docs/DESIGN.md)**
 
 ## Project Structure
 
 ```
 ai-speech-ingress-service/
 ├── docker/
-│   └── Dockerfile
+│   └── Dockerfile              # Multi-stage build
 ├── helm/
 │   └── ai-speech-ingress-service/
 │       ├── Chart.yaml
-│       ├── values.yaml
+│       ├── values.yaml          # Kafka, STT configuration
 │       └── templates/
+│           ├── deployment.yaml  # gRPC health probes
+│           └── service.yaml
+├── k8s/
+│   └── kafka-ui.yaml           # Kafka UI deployment
 ├── proto/
-│   └── audio.proto              # gRPC service definition
+│   └── audio.proto             # gRPC service definition
 ├── src/
 │   ├── cmd/
-│   │   ├── main.go              # Service entry point
-│   │   └── testclient/          # Test client
+│   │   ├── main.go             # Service entry point
+│   │   └── testclient/         # gRPC test client
 │   ├── internal/
-│   │   ├── api/grpc/            # gRPC server implementation
-│   │   ├── config/              # Configuration
-│   │   ├── events/              # Event publishing
-│   │   ├── models/              # Data models
-│   │   ├── schema/              # Validation
+│   │   ├── api/grpc/           # gRPC server (StreamAudio)
+│   │   ├── config/             # Environment configuration
+│   │   ├── events/             # Kafka publisher (dual topics)
+│   │   ├── models/             # TranscriptPartial, TranscriptFinal
+│   │   ├── schema/             # Validation (stub)
 │   │   └── service/
-│   │       ├── audio/           # Audio stream handler
-│   │       ├── segment/         # Segment ID generator
-│   │       ├── stt/             # STT adapter interface
-│   │       │   └── google/      # Google STT implementation
-│   │       └── transcription/   # Mock transcription (testing)
-│   └── proto/                   # Generated protobuf code
+│   │       ├── audio/          # Audio handler + segment transitions
+│   │       ├── segment/        # Thread-safe segment ID generator
+│   │       └── stt/
+│   │           ├── adapter.go  # Adapter + Callback interfaces
+│   │           ├── google/     # Google Cloud STT adapter
+│   │           └── mock/       # Mock adapter for testing
+│   └── proto/                  # Generated protobuf code
 ├── Makefile
 ├── Tiltfile
 └── README.md
@@ -82,11 +160,25 @@ make test-client
 | Environment Variable | Description | Default |
 |---------------------|-------------|---------|
 | `GRPC_PORT` | gRPC server port | `50051` |
+| `STT_PROVIDER` | STT provider (`mock`, `google`) | `mock` |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to Google Cloud service account JSON | - |
 | `KAFKA_ENABLED` | Enable Kafka publishing | `false` |
 | `KAFKA_BROKERS` | Comma-separated Kafka broker addresses | `localhost:9092` |
-| `KAFKA_TOPIC` | Kafka topic for transcript events | `interaction.transcripts` |
+| `KAFKA_TOPIC_PARTIAL` | Kafka topic for partial transcript events | `interaction.transcript.partial` |
+| `KAFKA_TOPIC_FINAL` | Kafka topic for final transcript events | `interaction.transcript.final` |
 | `KAFKA_PRINCIPAL` | Principal name for event headers | `svc-speech-ingress` |
+
+### STT Provider Selection
+
+```bash
+# Use mock STT (default, no cloud credentials needed)
+STT_PROVIDER=mock go run ./cmd
+
+# Use Google Cloud STT (requires credentials)
+STT_PROVIDER=google \
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/creds.json \
+go run ./cmd
+```
 
 ## gRPC API
 
@@ -104,35 +196,127 @@ Client-streaming RPC for audio transcription.
 **Response (`StreamAck`):**
 - `interactionId` - Confirmed interaction ID
 
+## Data Model
+
+### Hierarchy
+
+```
+interactionId (conversation / call)
+  │
+  ├── segmentId = seg-1 (utterance #1)
+  │     ├── transcript.partial  → "I want"
+  │     ├── transcript.partial  → "I want to cancel"
+  │     └── transcript.final    → "I want to cancel my subscription" (exactly once)
+  │
+  ├── segmentId = seg-2 (utterance #2)
+  │     ├── transcript.partial  → "Yes"
+  │     └── transcript.final    → "Yes please go ahead"
+  │
+  └── segmentId = seg-3 (utterance #3)
+        ├── transcript.partial  → "Thank"
+        ├── transcript.partial  → "Thank you"
+        └── transcript.final    → "Thank you very much"
+```
+
+### Key Concepts
+
+| Concept | Description | Example |
+|---------|-------------|---------|
+| **interactionId** | Unique identifier for a conversation/call. Persists for the entire call duration. | `call-abc-123` |
+| **segmentId** | Unique identifier for an utterance within a call. Auto-generated as `{interactionId}-seg-{n}`. | `call-abc-123-seg-1` |
+| **Partial Transcript** | Interim result as speech is being processed. Multiple per segment. Low latency, may change. | "I want to can" |
+| **Final Transcript** | Confirmed result after utterance ends. **Exactly one per segment**. Higher accuracy. | "I want to cancel" |
+
+### Guarantees
+
+- Each `segmentId` will have **zero or more** partial transcripts
+- Each `segmentId` will have **exactly one** final transcript
+- Partials are ordered by timestamp within a segment
+- The final transcript is always the last event for a segment
+- Separate Kafka topics enable independent ACLs and consumer groups
+
+### Utterance Boundary Detection
+
+The service detects when a speaker stops talking (utterance boundary) and automatically:
+
+1. **Sends final transcript** for the completed utterance
+2. **Generates new segmentId** for the next utterance
+3. **Continues processing** subsequent speech in the new segment
+
+```
+Audio Stream: "I want to cancel" [pause] "Yes please go ahead"
+                     │                         │
+                     ▼                         ▼
+              ┌─────────────┐           ┌─────────────┐
+              │   seg-1     │           │   seg-2     │
+              │ "I want to  │           │ "Yes please │
+              │  cancel"    │           │  go ahead"  │
+              └─────────────┘           └─────────────┘
+                     │                         │
+            End of Utterance          End of Utterance
+                 Detected                  Detected
+```
+
+**How it works:**
+- **Google STT**: Uses `SingleUtterance` mode which returns `END_OF_SINGLE_UTTERANCE` event
+- **Mock STT**: Simulates utterance completion after all partials are sent
+- **Handler**: Transitions to new segment on `OnEndOfUtterance()` callback
+
 ## Events
 
-The service publishes transcript events:
+The service publishes transcript events to **separate Kafka topics** for infrastructure-level access control:
 
-### `interaction.transcript.partial`
+### `interaction.transcript.partial` (Topic: `interaction.transcript.partial`)
+
+Published for each interim transcription result. Multiple events per segment.
+
 ```json
 {
   "eventType": "interaction.transcript.partial",
-  "interactionId": "int-123",
+  "interactionId": "call-abc-123",
   "tenantId": "tenant-456",
-  "segmentId": "int-123-seg-1",
+  "segmentId": "call-abc-123-seg-1",
   "text": "I want to cancel",
   "timestamp": 1736697600000
 }
 ```
 
-### `interaction.transcript.final`
+| Field | Type | Description |
+|-------|------|-------------|
+| `eventType` | string | Always `interaction.transcript.partial` |
+| `interactionId` | string | Conversation/call identifier |
+| `tenantId` | string | Tenant identifier |
+| `segmentId` | string | Utterance identifier (unique per segment) |
+| `text` | string | Current interim transcript text |
+| `timestamp` | int64 | Event timestamp (Unix ms) |
+
+### `interaction.transcript.final` (Topic: `interaction.transcript.final`)
+
+Published exactly once per segment when the utterance ends.
+
 ```json
 {
   "eventType": "interaction.transcript.final",
-  "interactionId": "int-123",
+  "interactionId": "call-abc-123",
   "tenantId": "tenant-456",
-  "segmentId": "int-123-seg-1",
-  "text": "I want to cancel my plan",
+  "segmentId": "call-abc-123-seg-1",
+  "text": "I want to cancel my subscription",
   "confidence": 0.94,
   "audioOffsetMs": 18420,
   "timestamp": 1736697600000
 }
 ```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `eventType` | string | Always `interaction.transcript.final` |
+| `interactionId` | string | Conversation/call identifier |
+| `tenantId` | string | Tenant identifier |
+| `segmentId` | string | Utterance identifier (unique per segment) |
+| `text` | string | Final confirmed transcript text |
+| `confidence` | float64 | STT confidence score (0.0 - 1.0) |
+| `audioOffsetMs` | int64 | Audio offset when utterance ended |
+| `timestamp` | int64 | Event timestamp (Unix ms) |
 
 ## Make Targets
 
@@ -181,17 +365,23 @@ make test-client
 ### Kafka
 
 ```bash
-# Check Kafka offsets (message count)
+# Check Kafka offsets (message count) - separate topics
 kubectl exec -n infra k3a-kafka-0 -- /opt/kafka/bin/kafka-get-offsets.sh \
-  --bootstrap-server localhost:9092 --topic interaction.transcripts
+  --bootstrap-server localhost:9092 --topic interaction.transcript.partial
+
+kubectl exec -n infra k3a-kafka-0 -- /opt/kafka/bin/kafka-get-offsets.sh \
+  --bootstrap-server localhost:9092 --topic interaction.transcript.final
 
 # List topics
 kubectl exec -n infra k3a-kafka-0 -- /opt/kafka/bin/kafka-topics.sh \
-  --bootstrap-server localhost:9092 --list
+  --bootstrap-server localhost:9092 --list | grep interaction
 
-# Describe topic
+# Describe topics
 kubectl exec -n infra k3a-kafka-0 -- /opt/kafka/bin/kafka-topics.sh \
-  --bootstrap-server localhost:9092 --describe --topic interaction.transcripts
+  --bootstrap-server localhost:9092 --describe --topic interaction.transcript.partial
+
+kubectl exec -n infra k3a-kafka-0 -- /opt/kafka/bin/kafka-topics.sh \
+  --bootstrap-server localhost:9092 --describe --topic interaction.transcript.final
 ```
 
 ### Kafka UI
@@ -237,7 +427,10 @@ cd src && go run ./cmd
 # Run locally with Kafka (requires port-forward to Kafka)
 kubectl port-forward -n infra svc/k3a-kafka 9092:9092 &
 echo "127.0.0.1 k3a-kafka.infra.svc.cluster.local" | sudo tee -a /etc/hosts
-KAFKA_ENABLED=true KAFKA_BROKERS=localhost:9092 KAFKA_TOPIC=interaction.transcripts go run ./cmd
+KAFKA_ENABLED=true KAFKA_BROKERS=localhost:9092 \
+  KAFKA_TOPIC_PARTIAL=interaction.transcript.partial \
+  KAFKA_TOPIC_FINAL=interaction.transcript.final \
+  go run ./cmd
 
 # Run with Google STT
 export GOOGLE_APPLICATION_CREDENTIALS=/path/to/credentials.json

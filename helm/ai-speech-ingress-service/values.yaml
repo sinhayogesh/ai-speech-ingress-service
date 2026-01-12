@@ -24,7 +24,8 @@ ingress:
 kafka:
   enabled: true
   brokers: "k3a-kafka.infra.svc.cluster.local:9092"
-  topic: "interaction.transcripts"
+  topicPartial: "interaction.transcript.partial"
+  topicFinal: "interaction.transcript.final"
   principal: "svc-speech-ingress"
 
 env: {}

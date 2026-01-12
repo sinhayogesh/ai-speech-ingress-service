@@ -15,10 +15,11 @@ type Config struct {
 
 // KafkaConfig holds Kafka publisher configuration.
 type KafkaConfig struct {
-	Enabled   bool
-	Brokers   []string
-	Topic     string
-	Principal string
+	Enabled      bool
+	Brokers      []string
+	TopicPartial string // Topic for partial transcripts
+	TopicFinal   string // Topic for final transcripts
+	Principal    string
 }
 
 // Load reads configuration from environment variables.
@@ -27,10 +28,11 @@ func Load() *Config {
 		Port:        envOrDefault("GRPC_PORT", "50051"),
 		STTProvider: envOrDefault("STT_PROVIDER", "mock"), // default to mock for local dev
 		Kafka: KafkaConfig{
-			Enabled:   envOrDefault("KAFKA_ENABLED", "false") == "true",
-			Brokers:   strings.Split(envOrDefault("KAFKA_BROKERS", "localhost:9092"), ","),
-			Topic:     envOrDefault("KAFKA_TOPIC", "interaction.transcripts"),
-			Principal: envOrDefault("KAFKA_PRINCIPAL", "svc-speech-ingress"),
+			Enabled:      envOrDefault("KAFKA_ENABLED", "false") == "true",
+			Brokers:      strings.Split(envOrDefault("KAFKA_BROKERS", "localhost:9092"), ","),
+			TopicPartial: envOrDefault("KAFKA_TOPIC_PARTIAL", "interaction.transcript.partial"),
+			TopicFinal:   envOrDefault("KAFKA_TOPIC_FINAL", "interaction.transcript.final"),
+			Principal:    envOrDefault("KAFKA_PRINCIPAL", "svc-speech-ingress"),
 		},
 	}
 }
