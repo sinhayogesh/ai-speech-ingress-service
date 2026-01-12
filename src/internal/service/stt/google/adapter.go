@@ -11,21 +11,46 @@ import (
 	"ai-speech-ingress-service/internal/service/stt"
 )
 
+// Config holds Google STT configuration.
+type Config struct {
+	LanguageCode   string // BCP-47 language code (e.g., "en-US")
+	SampleRateHz   int    // Audio sample rate in Hertz
+	InterimResults bool   // Enable partial/interim transcripts
+	AudioEncoding  string // Audio encoding (LINEAR16, MULAW, FLAC, etc.)
+}
+
+// DefaultConfig returns sensible defaults for Google STT.
+func DefaultConfig() Config {
+	return Config{
+		LanguageCode:   "en-US",
+		SampleRateHz:   8000,
+		InterimResults: true,
+		AudioEncoding:  "LINEAR16",
+	}
+}
+
 // Adapter implements stt.Adapter using Google Cloud Speech-to-Text.
 type Adapter struct {
 	client *speech.Client
 	stream speechpb.Speech_StreamingRecognizeClient
 	cb     stt.Callback
+	config Config
 }
 
-// New creates a new Google STT adapter.
+// New creates a new Google STT adapter with default configuration.
 // Requires GOOGLE_APPLICATION_CREDENTIALS environment variable to be set.
 func New(ctx context.Context) (*Adapter, error) {
+	return NewWithConfig(ctx, DefaultConfig())
+}
+
+// NewWithConfig creates a new Google STT adapter with custom configuration.
+// Requires GOOGLE_APPLICATION_CREDENTIALS environment variable to be set.
+func NewWithConfig(ctx context.Context, cfg Config) (*Adapter, error) {
 	c, err := speech.NewClient(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return &Adapter{client: c}, nil
+	return &Adapter{client: c, config: cfg}, nil
 }
 
 // Start begins a streaming recognition session and sends the initial config.
@@ -44,15 +69,39 @@ func (a *Adapter) Start(ctx context.Context, cb stt.Callback) error {
 		StreamingRequest: &speechpb.StreamingRecognizeRequest_StreamingConfig{
 			StreamingConfig: &speechpb.StreamingRecognitionConfig{
 				Config: &speechpb.RecognitionConfig{
-					Encoding:        speechpb.RecognitionConfig_LINEAR16,
-					SampleRateHertz: 8000,
-					LanguageCode:    "en-US",
+					Encoding:        parseAudioEncoding(a.config.AudioEncoding),
+					SampleRateHertz: int32(a.config.SampleRateHz),
+					LanguageCode:    a.config.LanguageCode,
 				},
-				InterimResults:  true,
+				InterimResults:  a.config.InterimResults,
 				SingleUtterance: true, // Enable utterance boundary detection
 			},
 		},
 	})
+}
+
+// parseAudioEncoding converts string encoding to protobuf enum.
+func parseAudioEncoding(encoding string) speechpb.RecognitionConfig_AudioEncoding {
+	switch encoding {
+	case "LINEAR16":
+		return speechpb.RecognitionConfig_LINEAR16
+	case "MULAW":
+		return speechpb.RecognitionConfig_MULAW
+	case "FLAC":
+		return speechpb.RecognitionConfig_FLAC
+	case "AMR":
+		return speechpb.RecognitionConfig_AMR
+	case "AMR_WB":
+		return speechpb.RecognitionConfig_AMR_WB
+	case "OGG_OPUS":
+		return speechpb.RecognitionConfig_OGG_OPUS
+	case "SPEEX_WITH_HEADER_BYTE":
+		return speechpb.RecognitionConfig_SPEEX_WITH_HEADER_BYTE
+	case "WEBM_OPUS":
+		return speechpb.RecognitionConfig_WEBM_OPUS
+	default:
+		return speechpb.RecognitionConfig_LINEAR16 // Safe default
+	}
 }
 
 // SendAudio sends audio bytes to Google Speech-to-Text.

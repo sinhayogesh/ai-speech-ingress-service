@@ -21,32 +21,59 @@ import (
 	pb "ai-speech-ingress-service/proto"
 )
 
+// STTConfig holds STT provider configuration.
+type STTConfig struct {
+	Provider       string
+	LanguageCode   string
+	SampleRateHz   int
+	InterimResults bool
+	AudioEncoding  string
+}
+
 // Server implements the AudioStreamService gRPC service.
 type Server struct {
 	pb.UnimplementedAudioStreamServiceServer
 	segments      *segment.Generator
 	publisher     *events.Publisher
 	validator     *schema.Validator
-	sttProvider   string
+	sttConfig     STTConfig
 	segmentLimits audio.SegmentLimits
 }
 
-// Register creates a new Server and registers it with the gRPC server.
+// Register creates a new Server and registers it with the gRPC server using defaults.
 func Register(g *grpc.Server, publisher *events.Publisher, sttProvider string) {
-	RegisterWithLimits(g, publisher, sttProvider, audio.DefaultLimits())
+	RegisterWithConfig(g, publisher, STTConfig{Provider: sttProvider}, audio.DefaultLimits())
 }
 
-// RegisterWithLimits creates a new Server with custom segment limits.
+// RegisterWithLimits creates a new Server with custom segment limits (legacy, use RegisterWithConfig).
 func RegisterWithLimits(g *grpc.Server, publisher *events.Publisher, sttProvider string, limits audio.SegmentLimits) {
+	RegisterWithConfig(g, publisher, STTConfig{Provider: sttProvider}, limits)
+}
+
+// RegisterWithConfig creates a new Server with full STT config and segment limits.
+func RegisterWithConfig(g *grpc.Server, publisher *events.Publisher, sttCfg STTConfig, limits audio.SegmentLimits) {
+	// Apply defaults for any unset STT config values
+	if sttCfg.LanguageCode == "" {
+		sttCfg.LanguageCode = "en-US"
+	}
+	if sttCfg.SampleRateHz == 0 {
+		sttCfg.SampleRateHz = 8000
+	}
+	if sttCfg.AudioEncoding == "" {
+		sttCfg.AudioEncoding = "LINEAR16"
+	}
+
 	s := &Server{
 		segments:      segment.New(),
 		publisher:     publisher,
 		validator:     schema.New(),
-		sttProvider:   sttProvider,
+		sttConfig:     sttCfg,
 		segmentLimits: limits,
 	}
-	log.Printf("Using STT provider: %s, limits: maxAudioBytes=%d maxDuration=%v maxPartials=%d",
-		sttProvider, limits.MaxAudioBytes, limits.MaxDuration, limits.MaxPartials)
+	log.Printf("STT config: provider=%s lang=%s sampleRate=%d interim=%v encoding=%s",
+		sttCfg.Provider, sttCfg.LanguageCode, sttCfg.SampleRateHz, sttCfg.InterimResults, sttCfg.AudioEncoding)
+	log.Printf("Segment limits: maxAudioBytes=%d maxDuration=%v maxPartials=%d",
+		limits.MaxAudioBytes, limits.MaxDuration, limits.MaxPartials)
 	pb.RegisterAudioStreamServiceServer(g, s)
 }
 
@@ -154,13 +181,19 @@ func (s *Server) StreamAudio(stream pb.AudioStreamService_StreamAudioServer) err
 
 // createSTTAdapter creates an STT adapter instance based on configuration.
 func (s *Server) createSTTAdapter(ctx context.Context) (stt.Adapter, error) {
-	switch s.sttProvider {
+	switch s.sttConfig.Provider {
 	case "google":
-		return google.New(ctx)
+		cfg := google.Config{
+			LanguageCode:   s.sttConfig.LanguageCode,
+			SampleRateHz:   s.sttConfig.SampleRateHz,
+			InterimResults: s.sttConfig.InterimResults,
+			AudioEncoding:  s.sttConfig.AudioEncoding,
+		}
+		return google.NewWithConfig(ctx, cfg)
 	case "mock":
 		return mock.New(), nil
 	default:
-		log.Printf("Unknown STT provider '%s', using mock", s.sttProvider)
+		log.Printf("Unknown STT provider '%s', using mock", s.sttConfig.Provider)
 		return mock.New(), nil
 	}
 }
