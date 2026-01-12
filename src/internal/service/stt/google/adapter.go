@@ -7,7 +7,7 @@ import (
 	"io"
 
 	speech "cloud.google.com/go/speech/apiv1"
-	speechpb "google.golang.org/genproto/googleapis/cloud/speech/v1"
+	speechpb "cloud.google.com/go/speech/apiv1/speechpb"
 
 	"ai-speech-ingress-service/internal/service/stt"
 )
