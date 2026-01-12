@@ -33,11 +33,29 @@ func main() {
 	})
 
 	log.Info().
-		Str("grpcPort", cfg.Port).
+		Str("servicePrincipal", cfg.Service.Principal).
+		Str("grpcPort", cfg.Service.GRPCPort).
 		Str("metricsPort", cfg.Observability.MetricsPort).
-		Str("sttProvider", cfg.STTProvider).
-		Bool("kafkaEnabled", cfg.Kafka.Enabled).
+		Str("logLevel", cfg.Observability.LogLevel).
 		Msg("Starting Speech Ingress Service")
+
+	log.Info().
+		Str("provider", cfg.STT.Provider).
+		Str("languageCode", cfg.STT.LanguageCode).
+		Int("sampleRateHz", cfg.STT.SampleRateHz).
+		Bool("interimResults", cfg.STT.InterimResults).
+		Str("audioEncoding", cfg.STT.AudioEncoding).
+		Msg("STT configuration")
+
+	log.Info().
+		Int64("maxAudioBytes", cfg.SegmentLimits.MaxAudioBytes).
+		Dur("maxDuration", cfg.SegmentLimits.MaxDuration).
+		Int("maxPartials", cfg.SegmentLimits.MaxPartials).
+		Msg("Segment limits")
+
+	log.Info().
+		Bool("kafkaEnabled", cfg.Kafka.Enabled).
+		Msg("Kafka configuration")
 
 	// Start observability HTTP server (Prometheus metrics)
 	var obsServer *observability.Server
@@ -56,9 +74,9 @@ func main() {
 	})
 	defer publisher.Close()
 
-	lis, err := net.Listen("tcp", ":"+cfg.Port)
+	lis, err := net.Listen("tcp", ":"+cfg.Service.GRPCPort)
 	if err != nil {
-		log.Fatal().Err(err).Str("port", cfg.Port).Msg("Failed to listen")
+		log.Fatal().Err(err).Str("port", cfg.Service.GRPCPort).Msg("Failed to listen")
 	}
 
 	// Create gRPC server with observability interceptors
@@ -78,23 +96,27 @@ func main() {
 	healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
 	healthServer.SetServingStatus("ai.speech.ingress.AudioStreamService", grpc_health_v1.HealthCheckResponse_SERVING)
 
-	// Register application services with segment limits for backpressure safety
+	// Register application services with STT config and segment limits
+	sttCfg := grpcapi.STTConfig{
+		Provider:       cfg.STT.Provider,
+		LanguageCode:   cfg.STT.LanguageCode,
+		SampleRateHz:   cfg.STT.SampleRateHz,
+		InterimResults: cfg.STT.InterimResults,
+		AudioEncoding:  cfg.STT.AudioEncoding,
+	}
 	limits := audio.SegmentLimits{
 		MaxAudioBytes: cfg.SegmentLimits.MaxAudioBytes,
 		MaxDuration:   cfg.SegmentLimits.MaxDuration,
 		MaxPartials:   cfg.SegmentLimits.MaxPartials,
 	}
-	grpcapi.RegisterWithLimits(server, publisher, cfg.STTProvider, limits)
+	grpcapi.RegisterWithConfig(server, publisher, sttCfg, limits)
 
 	// Enable gRPC reflection for debugging tools like grpcurl
 	reflection.Register(server)
 
 	go func() {
 		log.Info().
-			Str("port", cfg.Port).
-			Int64("maxAudioBytes", cfg.SegmentLimits.MaxAudioBytes).
-			Dur("maxDuration", cfg.SegmentLimits.MaxDuration).
-			Int("maxPartials", cfg.SegmentLimits.MaxPartials).
+			Str("port", cfg.Service.GRPCPort).
 			Msg("gRPC server listening")
 		if err := server.Serve(lis); err != nil {
 			log.Fatal().Err(err).Msg("gRPC serve failed")

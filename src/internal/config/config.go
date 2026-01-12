@@ -10,11 +10,47 @@ import (
 
 // Config holds all service configuration.
 type Config struct {
-	Port          string
-	STTProvider   string // "google" or "mock"
+	Service       ServiceConfig
+	STT           STTConfig
 	Kafka         KafkaConfig
 	SegmentLimits SegmentLimitsConfig
 	Observability ObservabilityConfig
+}
+
+// ServiceConfig holds service identity and runtime configuration.
+type ServiceConfig struct {
+	// Principal is the service identity for authentication/authorization.
+	// Default: svc-speech-ingress
+	Principal string
+
+	// GRPCPort is the port for the gRPC server.
+	// Default: 50051
+	GRPCPort string
+}
+
+// STTConfig holds Speech-to-Text provider configuration.
+// These parameters are passed to the STT provider (Google, etc.).
+type STTConfig struct {
+	// Provider is the STT provider to use ("google" or "mock").
+	// Default: mock (for local dev safety)
+	Provider string
+
+	// LanguageCode is the BCP-47 language code for transcription.
+	// Default: en-US
+	LanguageCode string
+
+	// SampleRateHz is the audio sample rate in Hertz.
+	// Default: 8000 (telephony standard)
+	SampleRateHz int
+
+	// InterimResults enables partial/interim transcripts.
+	// Default: true
+	InterimResults bool
+
+	// AudioEncoding is the audio encoding format.
+	// Supported: LINEAR16, MULAW, FLAC, etc.
+	// Default: LINEAR16
+	AudioEncoding string
 }
 
 // SegmentLimitsConfig holds safety limits for segment processing.
@@ -64,17 +100,42 @@ const (
 	DefaultMaxPartials   = 500             // 500 partials max per segment
 )
 
+// Default STT parameters
+const (
+	DefaultLanguageCode   = "en-US"
+	DefaultSampleRateHz   = 8000
+	DefaultInterimResults = true
+	DefaultAudioEncoding  = "LINEAR16"
+)
+
+// Default service identity
+const (
+	DefaultServicePrincipal = "svc-speech-ingress"
+	DefaultGRPCPort         = "50051"
+)
+
 // Load reads configuration from environment variables.
 func Load() *Config {
+	servicePrincipal := envOrDefault("SERVICE_PRINCIPAL", DefaultServicePrincipal)
+
 	return &Config{
-		Port:        envOrDefault("GRPC_PORT", "50051"),
-		STTProvider: envOrDefault("STT_PROVIDER", "mock"), // default to mock for local dev
+		Service: ServiceConfig{
+			Principal: servicePrincipal,
+			GRPCPort:  envOrDefault("GRPC_PORT", DefaultGRPCPort),
+		},
+		STT: STTConfig{
+			Provider:       envOrDefault("STT_PROVIDER", "mock"), // default to mock for local dev
+			LanguageCode:   envOrDefault("STT_LANGUAGE_CODE", DefaultLanguageCode),
+			SampleRateHz:   envOrDefaultInt("STT_SAMPLE_RATE_HZ", DefaultSampleRateHz),
+			InterimResults: envOrDefaultBool("STT_INTERIM_RESULTS", DefaultInterimResults),
+			AudioEncoding:  envOrDefault("STT_AUDIO_ENCODING", DefaultAudioEncoding),
+		},
 		Kafka: KafkaConfig{
 			Enabled:      envOrDefault("KAFKA_ENABLED", "false") == "true",
 			Brokers:      strings.Split(envOrDefault("KAFKA_BROKERS", "localhost:9092"), ","),
 			TopicPartial: envOrDefault("KAFKA_TOPIC_PARTIAL", "interaction.transcript.partial"),
 			TopicFinal:   envOrDefault("KAFKA_TOPIC_FINAL", "interaction.transcript.final"),
-			Principal:    envOrDefault("KAFKA_PRINCIPAL", "svc-speech-ingress"),
+			Principal:    envOrDefault("KAFKA_PRINCIPAL", servicePrincipal), // fallback to service principal
 		},
 		SegmentLimits: SegmentLimitsConfig{
 			MaxAudioBytes: envOrDefaultInt64("SEGMENT_MAX_AUDIO_BYTES", DefaultMaxAudioBytes),
@@ -119,6 +180,15 @@ func envOrDefaultDuration(key string, def time.Duration) time.Duration {
 	if v := os.Getenv(key); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			return d
+		}
+	}
+	return def
+}
+
+func envOrDefaultBool(key string, def bool) bool {
+	if v := os.Getenv(key); v != "" {
+		if b, err := strconv.ParseBool(v); err == nil {
+			return b
 		}
 	}
 	return def
