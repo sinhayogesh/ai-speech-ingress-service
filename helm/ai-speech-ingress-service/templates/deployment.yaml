@@ -29,8 +29,10 @@ spec:
               value: "{{ .Values.kafka.enabled }}"
             - name: KAFKA_BROKERS
               value: "{{ .Values.kafka.brokers }}"
-            - name: KAFKA_TOPIC
-              value: "{{ .Values.kafka.topic }}"
+            - name: KAFKA_TOPIC_PARTIAL
+              value: "{{ .Values.kafka.topicPartial }}"
+            - name: KAFKA_TOPIC_FINAL
+              value: "{{ .Values.kafka.topicFinal }}"
             - name: KAFKA_PRINCIPAL
               value: "{{ .Values.kafka.principal }}"
             {{- range $key, $value := .Values.env }}

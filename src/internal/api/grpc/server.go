@@ -65,7 +65,8 @@ func (s *Server) StreamAudio(stream pb.AudioStreamService_StreamAudioServer) err
 	}
 
 	// Create audio handler to coordinate STT and event publishing
-	handler := audio.NewHandler(adapter, s.publisher, interactionId, tenantId, segmentId)
+	// Pass segment generator so handler can create new segments on utterance boundaries
+	handler := audio.NewHandler(adapter, s.publisher, s.segments, interactionId, tenantId, segmentId)
 
 	// Start the STT streaming session
 	if err := handler.Start(ctx); err != nil {
@@ -110,7 +111,8 @@ func (s *Server) StreamAudio(stream pb.AudioStreamService_StreamAudioServer) err
 		}
 	}
 
-	log.Printf("Stream completed: interactionId=%s segmentId=%s", interactionId, segmentId)
+	log.Printf("Stream completed: interactionId=%s segmentId=%s utterances=%d",
+		interactionId, handler.GetSegmentId(), handler.GetUtteranceCount())
 
 	return stream.SendAndClose(&pb.StreamAck{InteractionId: interactionId})
 }

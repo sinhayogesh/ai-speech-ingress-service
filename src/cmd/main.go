@@ -20,12 +20,13 @@ import (
 func main() {
 	cfg := config.Load()
 
-	// Create Kafka publisher
+	// Create Kafka publisher with separate topics for partial and final transcripts
 	publisher := events.New(&events.Config{
-		Enabled:   cfg.Kafka.Enabled,
-		Brokers:   cfg.Kafka.Brokers,
-		Topic:     cfg.Kafka.Topic,
-		Principal: cfg.Kafka.Principal,
+		Enabled:      cfg.Kafka.Enabled,
+		Brokers:      cfg.Kafka.Brokers,
+		TopicPartial: cfg.Kafka.TopicPartial,
+		TopicFinal:   cfg.Kafka.TopicFinal,
+		Principal:    cfg.Kafka.Principal,
 	})
 	defer publisher.Close()
 

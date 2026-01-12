@@ -3,6 +3,7 @@ package google
 
 import (
 	"context"
+	"io"
 
 	speech "cloud.google.com/go/speech/apiv1"
 	speechpb "google.golang.org/genproto/googleapis/cloud/speech/v1"
@@ -28,6 +29,7 @@ func New(ctx context.Context) (*Adapter, error) {
 }
 
 // Start begins a streaming recognition session and sends the initial config.
+// Configures single utterance mode to detect end-of-utterance boundaries.
 func (a *Adapter) Start(ctx context.Context, cb stt.Callback) error {
 	stream, err := a.client.StreamingRecognize(ctx)
 	if err != nil {
@@ -37,6 +39,7 @@ func (a *Adapter) Start(ctx context.Context, cb stt.Callback) error {
 	a.cb = cb
 
 	// Send streaming config as the first message
+	// SingleUtterance mode tells Google to detect when the speaker stops talking
 	return stream.Send(&speechpb.StreamingRecognizeRequest{
 		StreamingRequest: &speechpb.StreamingRecognizeRequest_StreamingConfig{
 			StreamingConfig: &speechpb.StreamingRecognitionConfig{
@@ -45,7 +48,8 @@ func (a *Adapter) Start(ctx context.Context, cb stt.Callback) error {
 					SampleRateHertz: 8000,
 					LanguageCode:    "en-US",
 				},
-				InterimResults: true,
+				InterimResults:  true,
+				SingleUtterance: true, // Enable utterance boundary detection
 			},
 		},
 	})
@@ -70,14 +74,28 @@ func (a *Adapter) Close() error {
 
 // Listen receives transcript responses from Google and invokes callbacks.
 // Should be called in a separate goroutine after Start().
+// Detects END_OF_SINGLE_UTTERANCE events to signal utterance boundaries.
 func (a *Adapter) Listen() {
 	for {
 		resp, err := a.stream.Recv()
+		if err == io.EOF {
+			// Stream closed normally
+			return
+		}
 		if err != nil {
 			a.cb.OnError(err)
 			return
 		}
 
+		// Check for end-of-utterance event
+		// Google sends this when it detects the speaker has stopped talking
+		if resp.SpeechEventType == speechpb.StreamingRecognizeResponse_END_OF_SINGLE_UTTERANCE {
+			a.cb.OnEndOfUtterance()
+			// Note: After END_OF_SINGLE_UTTERANCE, Google will still send final results
+			// but won't accept more audio. The handler should start a new session.
+		}
+
+		// Process transcript results
 		for _, r := range resp.Results {
 			if len(r.Alternatives) == 0 {
 				continue

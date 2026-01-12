@@ -8,8 +8,16 @@ type Callback interface {
 	// OnPartial is called when an interim/partial transcript is received.
 	OnPartial(text string)
 
-	// OnFinal is called when a final transcript is received.
+	// OnFinal is called when a final transcript is received for the current utterance.
 	OnFinal(text string, confidence float64)
+
+	// OnEndOfUtterance is called when the STT provider detects the end of an utterance.
+	// This signals that the current segment is complete and a new segment should begin
+	// for subsequent speech. The handler should:
+	// 1. Finalize the current segment
+	// 2. Generate a new segmentId
+	// 3. Continue processing audio in the new segment
+	OnEndOfUtterance()
 
 	// OnError is called when an error occurs during transcription.
 	OnError(err error)
