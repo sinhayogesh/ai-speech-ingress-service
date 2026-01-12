@@ -76,7 +76,21 @@ type Callback interface {
 | Provider | File | Notes |
 |----------|------|-------|
 | Mock | `stt/mock/adapter.go` | Cycles through 5 sample utterances |
-| Google | `stt/google/adapter.go` | Uses `SingleUtterance` mode |
+| Google | `stt/google/adapter.go` | Uses `SingleUtterance` mode, configurable params |
+
+**Google STT Configuration:**
+
+The Google adapter accepts configuration via `STT_*` environment variables:
+
+```go
+cfg := google.Config{
+    LanguageCode:   "en-US",       // STT_LANGUAGE_CODE
+    SampleRateHz:   8000,          // STT_SAMPLE_RATE_HZ
+    InterimResults: true,          // STT_INTERIM_RESULTS
+    AudioEncoding:  "LINEAR16",    // STT_AUDIO_ENCODING
+}
+adapter, err := google.NewWithConfig(ctx, cfg)
+```
 
 #### 4. Segment Generator & Lifecycle (`internal/service/segment/`)
 
@@ -349,6 +363,83 @@ Current: Log and return error. Future: Dead-letter queue, retries.
 
 ---
 
+## Configuration
+
+All behavior is adjustable via environment variables with safe defaults. No dynamic reloads. No config sprawl.
+
+### Design Principles
+
+1. **Safe defaults** - Service runs correctly out-of-the-box
+2. **Externalized** - All tunable parameters via env vars
+3. **No reloads** - Restart required for config changes (simplicity > complexity)
+4. **Future-ready** - STT params will vary per tenant/region later
+
+### Configuration Categories
+
+#### A) Service Identity & Runtime
+
+| Config | Default | Env Var | Purpose |
+|--------|---------|---------|---------|
+| Service Principal | `svc-speech-ingress` | `SERVICE_PRINCIPAL` | Auth/authz identity |
+| gRPC Port | `50051` | `GRPC_PORT` | Service listen port |
+| Log Level | `info` | `LOG_LEVEL` | Logging verbosity |
+
+#### B) STT Parameters
+
+| Config | Default | Env Var | Purpose |
+|--------|---------|---------|---------|
+| Provider | `mock` | `STT_PROVIDER` | STT backend (`mock`, `google`) |
+| Language Code | `en-US` | `STT_LANGUAGE_CODE` | BCP-47 transcription language |
+| Sample Rate | `8000` | `STT_SAMPLE_RATE_HZ` | Audio sample rate (Hz) |
+| Interim Results | `true` | `STT_INTERIM_RESULTS` | Enable partial transcripts |
+| Audio Encoding | `LINEAR16` | `STT_AUDIO_ENCODING` | Audio format |
+
+**Supported encodings:** `LINEAR16`, `MULAW`, `FLAC`, `AMR`, `AMR_WB`, `OGG_OPUS`, `SPEEX_WITH_HEADER_BYTE`, `WEBM_OPUS`
+
+#### C) Segment Guardrails
+
+| Config | Default | Env Var | Purpose |
+|--------|---------|---------|---------|
+| Max Audio Bytes | 5MB | `SEGMENT_MAX_AUDIO_BYTES` | Memory exhaustion prevention |
+| Max Duration | 5m | `SEGMENT_MAX_DURATION` | Zombie segment prevention |
+| Max Partials | 500 | `SEGMENT_MAX_PARTIALS` | Downstream flood prevention |
+
+### Loading
+
+Configuration is loaded once at startup from `internal/config/config.go`:
+
+```go
+cfg := config.Load()
+
+// Service identity
+cfg.Service.Principal  // "svc-speech-ingress"
+cfg.Service.GRPCPort   // "50051"
+
+// STT parameters
+cfg.STT.Provider       // "mock"
+cfg.STT.LanguageCode   // "en-US"
+cfg.STT.SampleRateHz   // 8000
+cfg.STT.InterimResults // true
+cfg.STT.AudioEncoding  // "LINEAR16"
+
+// Segment limits
+cfg.SegmentLimits.MaxAudioBytes // 5MB
+cfg.SegmentLimits.MaxDuration   // 5m
+cfg.SegmentLimits.MaxPartials   // 500
+```
+
+### Startup Logging
+
+All configuration is logged at startup for visibility:
+
+```json
+{"level":"info","servicePrincipal":"svc-speech-ingress","grpcPort":"50051","logLevel":"info","message":"Starting Speech Ingress Service"}
+{"level":"info","provider":"mock","languageCode":"en-US","sampleRateHz":8000,"interimResults":true,"audioEncoding":"LINEAR16","message":"STT configuration"}
+{"level":"info","maxAudioBytes":5242880,"maxDuration":"5m0s","maxPartials":500,"message":"Segment limits"}
+```
+
+---
+
 ## Backpressure & Buffering Limits
 
 Safety guardrails to prevent unbounded resource usage. These are not optimizations—they are critical for production stability.
@@ -402,9 +493,7 @@ Metrics are logged on segment completion and reset on new segment.
 | 5 minutes | Safety cap | No single utterance should exceed this |
 | 500 partials | ~1 per 600ms | Typical STT sends partials every 200-500ms |
 
-### Configuration
-
-Override via environment variables:
+### Override Example
 
 ```bash
 export SEGMENT_MAX_AUDIO_BYTES=10485760  # 10MB
