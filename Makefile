@@ -31,6 +31,9 @@ test: ## Run tests
 test-client: ## Run the test gRPC client
 	cd src && go run ./cmd/testclient
 
+audio-test: ## Stream real audio file to service (requires running server)
+	cd src && go run ./cmd/audioclient -audio=../testdata/sample-8khz.wav
+
 # ---------------------------------------------------------
 # Dependencies
 # ---------------------------------------------------------
