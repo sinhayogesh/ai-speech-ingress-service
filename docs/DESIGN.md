@@ -349,6 +349,71 @@ Current: Log and return error. Future: Dead-letter queue, retries.
 
 ---
 
+## Backpressure & Buffering Limits
+
+Safety guardrails to prevent unbounded resource usage. These are not optimizations—they are critical for production stability.
+
+### Why Limits Are Necessary
+
+Without limits, a misbehaving client or network issue could:
+- **Exhaust memory** (unbounded audio buffering)
+- **Overwhelm downstream systems** (too many partials)
+- **Create zombie segments** (never-ending streams)
+
+### Configured Limits
+
+| Limit | Default | Env Variable | Purpose |
+|-------|---------|--------------|---------|
+| **Max Audio Bytes** | 5MB | `SEGMENT_MAX_AUDIO_BYTES` | Prevent memory exhaustion |
+| **Max Duration** | 5 minutes | `SEGMENT_MAX_DURATION` | Prevent zombie segments |
+| **Max Partials** | 500 | `SEGMENT_MAX_PARTIALS` | Prevent downstream flood |
+
+### Enforcement Behavior
+
+When any limit is exceeded:
+1. **Segment is DROPPED** immediately
+2. **No final transcript** is emitted
+3. **Detailed log** with limit that was exceeded
+4. **Error returned** to caller (for audio/duration)
+
+```go
+// Audio bytes limit check
+if h.limits.MaxAudioBytes > 0 && currentBytes > h.limits.MaxAudioBytes {
+    reason := fmt.Sprintf("max audio bytes exceeded: %d > %d", currentBytes, h.limits.MaxAudioBytes)
+    h.DropSegment(reason)
+    return fmt.Errorf("segment limit exceeded: %s", reason)
+}
+```
+
+### Metrics Tracking
+
+Each segment tracks:
+- `audioBytes` - Total audio bytes received
+- `partialCount` - Number of partial transcripts
+- `duration` - Time since segment started
+
+Metrics are logged on segment completion and reset on new segment.
+
+### Default Values Rationale
+
+| Limit | Value | Reasoning |
+|-------|-------|-----------|
+| 5MB audio | ~625 seconds at 8kHz 16-bit mono | Well beyond reasonable utterance length |
+| 5 minutes | Safety cap | No single utterance should exceed this |
+| 500 partials | ~1 per 600ms | Typical STT sends partials every 200-500ms |
+
+### Configuration
+
+Override via environment variables:
+
+```bash
+export SEGMENT_MAX_AUDIO_BYTES=10485760  # 10MB
+export SEGMENT_MAX_DURATION=10m          # 10 minutes
+export SEGMENT_MAX_PARTIALS=1000         # 1000 partials
+```
+
+---
+
 ## Testing
 
 ### Mock STT Adapter

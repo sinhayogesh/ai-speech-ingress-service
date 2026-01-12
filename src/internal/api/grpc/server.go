@@ -24,21 +24,29 @@ import (
 // Server implements the AudioStreamService gRPC service.
 type Server struct {
 	pb.UnimplementedAudioStreamServiceServer
-	segments    *segment.Generator
-	publisher   *events.Publisher
-	validator   *schema.Validator
-	sttProvider string
+	segments      *segment.Generator
+	publisher     *events.Publisher
+	validator     *schema.Validator
+	sttProvider   string
+	segmentLimits audio.SegmentLimits
 }
 
 // Register creates a new Server and registers it with the gRPC server.
 func Register(g *grpc.Server, publisher *events.Publisher, sttProvider string) {
+	RegisterWithLimits(g, publisher, sttProvider, audio.DefaultLimits())
+}
+
+// RegisterWithLimits creates a new Server with custom segment limits.
+func RegisterWithLimits(g *grpc.Server, publisher *events.Publisher, sttProvider string, limits audio.SegmentLimits) {
 	s := &Server{
-		segments:    segment.New(),
-		publisher:   publisher,
-		validator:   schema.New(),
-		sttProvider: sttProvider,
+		segments:      segment.New(),
+		publisher:     publisher,
+		validator:     schema.New(),
+		sttProvider:   sttProvider,
+		segmentLimits: limits,
 	}
-	log.Printf("Using STT provider: %s", sttProvider)
+	log.Printf("Using STT provider: %s, limits: maxAudioBytes=%d maxDuration=%v maxPartials=%d",
+		sttProvider, limits.MaxAudioBytes, limits.MaxDuration, limits.MaxPartials)
 	pb.RegisterAudioStreamServiceServer(g, s)
 }
 
@@ -69,7 +77,8 @@ func (s *Server) StreamAudio(stream pb.AudioStreamService_StreamAudioServer) err
 
 	// Create audio handler to coordinate STT and event publishing
 	// Pass segment generator so handler can create new segments on utterance boundaries
-	handler := audio.NewHandler(adapter, s.publisher, s.segments, interactionId, tenantId, segmentId)
+	// Use configured limits for backpressure safety
+	handler := audio.NewHandlerWithLimits(adapter, s.publisher, s.segments, interactionId, tenantId, segmentId, s.segmentLimits)
 
 	// Start the STT streaming session
 	if err := handler.Start(ctx); err != nil {
