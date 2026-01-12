@@ -9,6 +9,7 @@ A Go gRPC service for real-time speech-to-text transcription. It receives audio 
 - **Utterance boundary detection** - Automatic segment transitions on speech pauses
 - **Separate Kafka topics** - Infrastructure-level access control for partials vs finals
 - **Kubernetes-native** - Helm charts, health probes, graceful shutdown
+- **Observability** - Prometheus metrics, structured logging (zerolog), health endpoints
 
 ## Architecture
 
@@ -116,6 +117,9 @@ ai-speech-ingress-service/
 │   │   ├── config/             # Environment configuration
 │   │   ├── events/             # Kafka publisher (dual topics)
 │   │   ├── models/             # TranscriptPartial, TranscriptFinal
+│   │   ├── observability/      # Metrics, logging, HTTP server
+│   │   │   ├── metrics/        # Prometheus metrics
+│   │   │   └── logging/        # Structured logging (zerolog)
 │   │   ├── schema/             # Validation (stub)
 │   │   └── service/
 │   │       ├── audio/          # Audio handler + segment transitions
@@ -167,6 +171,13 @@ make test-client
 | `KAFKA_TOPIC_PARTIAL` | Kafka topic for partial transcript events | `interaction.transcript.partial` |
 | `KAFKA_TOPIC_FINAL` | Kafka topic for final transcript events | `interaction.transcript.final` |
 | `KAFKA_PRINCIPAL` | Principal name for event headers | `svc-speech-ingress` |
+| `METRICS_ENABLED` | Enable Prometheus metrics endpoint | `true` |
+| `METRICS_PORT` | HTTP port for metrics server | `9090` |
+| `LOG_LEVEL` | Log level (`debug`, `info`, `warn`, `error`) | `info` |
+| `LOG_FORMAT` | Log format (`json`, `console`) | `json` |
+| `SEGMENT_MAX_AUDIO_BYTES` | Max audio bytes per segment (backpressure) | `5242880` (5MB) |
+| `SEGMENT_MAX_DURATION` | Max segment duration (backpressure) | `5m` |
+| `SEGMENT_MAX_PARTIALS` | Max partials per segment (backpressure) | `500` |
 
 ### STT Provider Selection
 
@@ -317,6 +328,77 @@ Published exactly once per segment when the utterance ends.
 | `confidence` | float64 | STT confidence score (0.0 - 1.0) |
 | `audioOffsetMs` | int64 | Audio offset when utterance ended |
 | `timestamp` | int64 | Event timestamp (Unix ms) |
+
+## Observability
+
+The service exposes comprehensive observability features for production monitoring.
+
+### Prometheus Metrics
+
+Metrics are exposed on `:9090/metrics` (configurable via `METRICS_PORT`).
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `ai_speech_ingress_streams_total` | Counter | Total gRPC streams started |
+| `ai_speech_ingress_streams_active` | Gauge | Currently active streams |
+| `ai_speech_ingress_streams_success_total` | Counter | Successfully completed streams |
+| `ai_speech_ingress_streams_failed_total` | Counter | Failed streams |
+| `ai_speech_ingress_stream_duration_seconds` | Histogram | Stream duration |
+| `ai_speech_ingress_segments_created_total` | Counter | Segments created |
+| `ai_speech_ingress_segments_completed_total` | Counter | Segments completed with final |
+| `ai_speech_ingress_segments_dropped_total` | Counter | Segments dropped (by reason) |
+| `ai_speech_ingress_transcripts_partial_total` | Counter | Partial transcripts received |
+| `ai_speech_ingress_transcripts_final_total` | Counter | Final transcripts received |
+| `ai_speech_ingress_audio_bytes_received_total` | Counter | Audio bytes processed |
+| `ai_speech_ingress_audio_frames_received_total` | Counter | Audio frames processed |
+| `ai_speech_ingress_kafka_publish_total` | Counter | Kafka messages published (by topic) |
+| `ai_speech_ingress_kafka_publish_errors_total` | Counter | Kafka publish errors (by topic) |
+| `ai_speech_ingress_kafka_publish_latency_seconds` | Histogram | Kafka publish latency |
+| `ai_speech_ingress_segment_limit_exceeded_total` | Counter | Segment limit violations (by type) |
+| `ai_speech_ingress_stt_errors_total` | Counter | STT provider errors |
+| `ai_speech_ingress_stt_utterances_total` | Counter | Utterance boundaries detected |
+
+### HTTP Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `/metrics` | Prometheus metrics |
+| `/healthz` | Liveness probe (always returns 200) |
+| `/readyz` | Readiness probe (returns 200 when ready) |
+
+### Structured Logging
+
+The service uses [zerolog](https://github.com/rs/zerolog) for structured JSON logging.
+
+```json
+{
+  "level": "info",
+  "time": "2026-01-13T10:30:00Z",
+  "caller": "audio/handler.go:120",
+  "interactionId": "call-abc-123",
+  "tenantId": "tenant-456",
+  "segmentId": "call-abc-123-seg-1",
+  "message": "Final transcript received"
+}
+```
+
+### Kubernetes Integration
+
+The Helm chart includes:
+- **ServiceMonitor** for Prometheus Operator auto-discovery
+- **Pod annotations** for Prometheus scraping
+- **Separate metrics port** in Service definition
+
+```bash
+# Port-forward metrics
+kubectl port-forward -n core deploy/ai-speech-ingress-service 9090:9090 &
+
+# View metrics
+curl http://localhost:9090/metrics | grep ai_speech_ingress
+
+# Check health
+curl http://localhost:9090/healthz
+```
 
 ## Make Targets
 

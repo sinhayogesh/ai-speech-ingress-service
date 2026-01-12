@@ -5,12 +5,15 @@ package audio
 import (
 	"context"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+
 	"ai-speech-ingress-service/internal/events"
 	"ai-speech-ingress-service/internal/models"
+	"ai-speech-ingress-service/internal/observability/metrics"
 	"ai-speech-ingress-service/internal/service/segment"
 	"ai-speech-ingress-service/internal/service/stt"
 )
@@ -63,6 +66,10 @@ type Handler struct {
 	mu                  sync.RWMutex
 	onSegmentTransition SegmentTransitionCallback
 	utteranceCount      int
+
+	// Observability
+	metrics *metrics.Metrics
+	logger  zerolog.Logger
 }
 
 // NewHandler creates a new audio handler for a transcription session.
@@ -83,6 +90,17 @@ func NewHandlerWithLimits(
 	interactionId, tenantId, segmentId string,
 	limits SegmentLimits,
 ) *Handler {
+	logger := log.With().
+		Str("component", "audio.Handler").
+		Str("interactionId", interactionId).
+		Str("tenantId", tenantId).
+		Str("segmentId", segmentId).
+		Logger()
+
+	// Record segment creation
+	m := metrics.DefaultMetrics
+	m.RecordSegmentCreated()
+
 	return &Handler{
 		adapter:          adapter,
 		publisher:        publisher,
@@ -92,6 +110,8 @@ func NewHandlerWithLimits(
 		lifecycle:        segment.NewLifecycle(segmentId),
 		limits:           limits,
 		segmentStartTime: time.Now(),
+		metrics:          m,
+		logger:           logger,
 	}
 }
 
@@ -105,6 +125,7 @@ func (h *Handler) SetSegmentTransitionCallback(cb SegmentTransitionCallback) {
 
 // Start begins the STT session with this handler as the callback receiver.
 func (h *Handler) Start(ctx context.Context) error {
+	h.logger.Info().Msg("Starting audio handler")
 	return h.adapter.Start(ctx, h)
 }
 
@@ -118,9 +139,13 @@ func (h *Handler) SendAudio(ctx context.Context, audio []byte, audioOffsetMs int
 	startTime := h.segmentStartTime
 	h.mu.Unlock()
 
+	// Record audio metrics
+	h.metrics.RecordAudioReceived(len(audio))
+
 	// Check audio bytes limit
 	if h.limits.MaxAudioBytes > 0 && currentBytes > h.limits.MaxAudioBytes {
 		reason := fmt.Sprintf("max audio bytes exceeded: %d > %d", currentBytes, h.limits.MaxAudioBytes)
+		h.metrics.RecordLimitExceeded("audio_bytes")
 		h.DropSegment(reason)
 		return fmt.Errorf("segment limit exceeded: %s", reason)
 	}
@@ -128,6 +153,7 @@ func (h *Handler) SendAudio(ctx context.Context, audio []byte, audioOffsetMs int
 	// Check duration limit
 	if h.limits.MaxDuration > 0 && time.Since(startTime) > h.limits.MaxDuration {
 		reason := fmt.Sprintf("max duration exceeded: %v > %v", time.Since(startTime), h.limits.MaxDuration)
+		h.metrics.RecordLimitExceeded("duration")
 		h.DropSegment(reason)
 		return fmt.Errorf("segment limit exceeded: %s", reason)
 	}
@@ -137,6 +163,11 @@ func (h *Handler) SendAudio(ctx context.Context, audio []byte, audioOffsetMs int
 
 // Close ends the STT session and closes the current segment.
 func (h *Handler) Close() error {
+	h.logger.Info().
+		Str("segmentId", h.lifecycle.SegmentId()).
+		Str("state", h.lifecycle.State().String()).
+		Msg("Closing audio handler")
+
 	h.lifecycle.Close()
 	return h.adapter.Close()
 }
@@ -165,8 +196,11 @@ func (h *Handler) GetUtteranceCount() int {
 func (h *Handler) OnPartial(text string) {
 	// Validate state transition
 	if err := h.lifecycle.EmitPartial(); err != nil {
-		log.Printf("OnPartial ignored: segmentId=%s state=%s err=%v",
-			h.lifecycle.SegmentId(), h.lifecycle.State(), err)
+		h.logger.Warn().
+			Str("segmentId", h.lifecycle.SegmentId()).
+			Str("state", h.lifecycle.State().String()).
+			Err(err).
+			Msg("OnPartial ignored")
 		return
 	}
 
@@ -178,9 +212,13 @@ func (h *Handler) OnPartial(text string) {
 
 	if h.limits.MaxPartials > 0 && count > h.limits.MaxPartials {
 		reason := fmt.Sprintf("max partials exceeded: %d > %d", count, h.limits.MaxPartials)
+		h.metrics.RecordLimitExceeded("partials")
 		h.DropSegment(reason)
 		return
 	}
+
+	// Record metrics
+	h.metrics.RecordPartialTranscript()
 
 	ev := models.TranscriptPartial{
 		EventType:     "interaction.transcript.partial",
@@ -198,14 +236,21 @@ func (h *Handler) OnPartial(text string) {
 func (h *Handler) OnFinal(text string, confidence float64) {
 	// Validate state transition - this also transitions to FINAL_EMITTED
 	if err := h.lifecycle.EmitFinal(); err != nil {
-		log.Printf("OnFinal ignored: segmentId=%s state=%s err=%v",
-			h.lifecycle.SegmentId(), h.lifecycle.State(), err)
+		h.logger.Warn().
+			Str("segmentId", h.lifecycle.SegmentId()).
+			Str("state", h.lifecycle.State().String()).
+			Err(err).
+			Msg("OnFinal ignored")
 		return
 	}
 
 	h.mu.RLock()
 	audioOffsetMs := h.lastAudioOffsetMs
 	h.mu.RUnlock()
+
+	// Record metrics
+	h.metrics.RecordFinalTranscript()
+	h.metrics.RecordSegmentCompleted()
 
 	ev := models.TranscriptFinal{
 		EventType:     "interaction.transcript.final",
@@ -217,6 +262,13 @@ func (h *Handler) OnFinal(text string, confidence float64) {
 		AudioOffsetMs: audioOffsetMs,
 		Timestamp:     time.Now().UnixMilli(),
 	}
+
+	h.logger.Info().
+		Str("segmentId", ev.SegmentID).
+		Float64("confidence", confidence).
+		Int("textLen", len(text)).
+		Msg("Final transcript received")
+
 	h.publishFinal(ev)
 }
 
@@ -254,9 +306,21 @@ func (h *Handler) OnEndOfUtterance() {
 	// Reset lifecycle for new segment
 	h.lifecycle.Reset(newSegmentId)
 
-	log.Printf("End of utterance: interactionId=%s oldSegment=%s (state=%s) newSegment=%s utterance=#%d metrics=[bytes=%d partials=%d duration=%v]",
-		h.interactionId, oldSegmentId, oldState, newSegmentId, h.utteranceCount,
-		oldAudioBytes, oldPartialCount, oldDuration.Round(time.Millisecond))
+	// Record metrics
+	h.metrics.RecordUtterance()
+	h.metrics.RecordSegmentCreated()
+
+	// Update logger context
+	h.logger = h.logger.With().Str("segmentId", newSegmentId).Logger()
+
+	h.logger.Info().
+		Str("oldSegmentId", oldSegmentId).
+		Str("oldState", oldState.String()).
+		Int("utteranceCount", h.utteranceCount).
+		Int64("audioBytes", oldAudioBytes).
+		Int("partialCount", oldPartialCount).
+		Dur("duration", oldDuration).
+		Msg("End of utterance - new segment created")
 
 	// Notify server of segment transition if callback is set
 	if cb != nil {
@@ -279,8 +343,16 @@ func (h *Handler) OnError(err error) {
 	// Drop the segment - no final will be emitted
 	dropped := h.lifecycle.Drop()
 
-	log.Printf("STT error - segment DROPPED: interactionId=%s segmentId=%s previousState=%s dropped=%v err=%v",
-		h.interactionId, segmentId, oldState, dropped, err)
+	// Record metrics
+	h.metrics.RecordSegmentDropped("stt_error")
+	h.metrics.RecordSTTError("", "stream_error")
+
+	h.logger.Error().
+		Err(err).
+		Str("segmentId", segmentId).
+		Str("previousState", oldState.String()).
+		Bool("dropped", dropped).
+		Msg("STT error - segment DROPPED")
 }
 
 // DropSegment explicitly drops the current segment without emitting a final.
@@ -294,8 +366,16 @@ func (h *Handler) DropSegment(reason string) bool {
 
 	dropped := h.lifecycle.Drop()
 
-	log.Printf("Segment DROPPED: interactionId=%s segmentId=%s previousState=%s reason=%s",
-		h.interactionId, segmentId, oldState, reason)
+	if dropped {
+		h.metrics.RecordSegmentDropped(reason)
+	}
+
+	h.logger.Warn().
+		Str("segmentId", segmentId).
+		Str("previousState", oldState.String()).
+		Str("reason", reason).
+		Bool("dropped", dropped).
+		Msg("Segment DROPPED")
 
 	return dropped
 }
@@ -326,13 +406,19 @@ func (h *Handler) GetSegmentMetrics() SegmentMetrics {
 func (h *Handler) publishPartial(ev models.TranscriptPartial) {
 	ctx := context.Background()
 	if err := h.publisher.PublishPartial(ctx, h.interactionId, ev); err != nil {
-		log.Printf("Failed to publish partial: segmentId=%s err=%v", ev.SegmentID, err)
+		h.logger.Error().
+			Err(err).
+			Str("segmentId", ev.SegmentID).
+			Msg("Failed to publish partial")
 	}
 }
 
 func (h *Handler) publishFinal(ev models.TranscriptFinal) {
 	ctx := context.Background()
 	if err := h.publisher.PublishFinal(ctx, h.interactionId, ev); err != nil {
-		log.Printf("Failed to publish final: segmentId=%s err=%v", ev.SegmentID, err)
+		h.logger.Error().
+			Err(err).
+			Str("segmentId", ev.SegmentID).
+			Msg("Failed to publish final")
 	}
 }

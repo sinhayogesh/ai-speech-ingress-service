@@ -17,6 +17,15 @@ service:
 grpc:
   port: 50051
 
+# Observability settings
+observability:
+  metrics:
+    enabled: true
+    port: 9090
+  logging:
+    level: info    # debug, info, warn, error
+    format: json   # json, console
+
 ingress:
   enabled: true
   type: istio
@@ -27,5 +36,14 @@ kafka:
   topicPartial: "interaction.transcript.partial"
   topicFinal: "interaction.transcript.final"
   principal: "svc-speech-ingress"
+
+# STT provider: google or mock
+sttProvider: mock
+
+# Segment safety limits for backpressure
+segmentLimits:
+  maxAudioBytes: 5242880    # 5MB
+  maxDuration: "5m"         # 5 minutes
+  maxPartials: 500
 
 env: {}

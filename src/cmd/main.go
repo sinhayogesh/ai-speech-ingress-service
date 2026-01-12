@@ -1,12 +1,14 @@
 package main
 
 import (
-	"log"
+	"context"
 	"net"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
@@ -15,11 +17,34 @@ import (
 	grpcapi "ai-speech-ingress-service/internal/api/grpc"
 	"ai-speech-ingress-service/internal/config"
 	"ai-speech-ingress-service/internal/events"
+	"ai-speech-ingress-service/internal/observability"
+	"ai-speech-ingress-service/internal/observability/logging"
+	"ai-speech-ingress-service/internal/observability/metrics"
 	"ai-speech-ingress-service/internal/service/audio"
 )
 
 func main() {
 	cfg := config.Load()
+
+	// Initialize structured logging
+	logging.Init(logging.Config{
+		Level:  cfg.Observability.LogLevel,
+		Format: cfg.Observability.LogFormat,
+	})
+
+	log.Info().
+		Str("grpcPort", cfg.Port).
+		Str("metricsPort", cfg.Observability.MetricsPort).
+		Str("sttProvider", cfg.STTProvider).
+		Bool("kafkaEnabled", cfg.Kafka.Enabled).
+		Msg("Starting Speech Ingress Service")
+
+	// Start observability HTTP server (Prometheus metrics)
+	var obsServer *observability.Server
+	if cfg.Observability.MetricsEnabled {
+		obsServer = observability.NewServer(":" + cfg.Observability.MetricsPort)
+		obsServer.Start()
+	}
 
 	// Create Kafka publisher with separate topics for partial and final transcripts
 	publisher := events.New(&events.Config{
@@ -33,10 +58,19 @@ func main() {
 
 	lis, err := net.Listen("tcp", ":"+cfg.Port)
 	if err != nil {
-		log.Fatalf("failed to listen: %v", err)
+		log.Fatal().Err(err).Str("port", cfg.Port).Msg("Failed to listen")
 	}
 
-	server := grpc.NewServer()
+	// Create gRPC server with observability interceptors
+	m := metrics.DefaultMetrics
+	server := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(
+			observability.UnaryServerInterceptor(),
+		),
+		grpc.ChainStreamInterceptor(
+			observability.StreamServerInterceptor(m),
+		),
+	)
 
 	// Register gRPC health check service
 	healthServer := health.NewServer()
@@ -56,9 +90,14 @@ func main() {
 	reflection.Register(server)
 
 	go func() {
-		log.Printf("Speech Ingress Service started on :%s", cfg.Port)
+		log.Info().
+			Str("port", cfg.Port).
+			Int64("maxAudioBytes", cfg.SegmentLimits.MaxAudioBytes).
+			Dur("maxDuration", cfg.SegmentLimits.MaxDuration).
+			Int("maxPartials", cfg.SegmentLimits.MaxPartials).
+			Msg("gRPC server listening")
 		if err := server.Serve(lis); err != nil {
-			log.Fatalf("grpc serve failed: %v", err)
+			log.Fatal().Err(err).Msg("gRPC serve failed")
 		}
 	}()
 
@@ -66,7 +105,20 @@ func main() {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	<-sig
 
-	log.Println("shutting down gRPC server")
+	log.Info().Msg("Received shutdown signal")
+
+	// Graceful shutdown
 	healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
+
+	// Shutdown observability server
+	if obsServer != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := obsServer.Shutdown(ctx); err != nil {
+			log.Error().Err(err).Msg("Error shutting down observability server")
+		}
+	}
+
 	server.GracefulStop()
+	log.Info().Msg("Server stopped")
 }

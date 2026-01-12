@@ -11,5 +11,11 @@ spec:
       targetPort: {{ .Values.grpc.port }}
       protocol: TCP
       name: grpc
+    {{- if .Values.observability.metrics.enabled }}
+    - port: {{ .Values.observability.metrics.port }}
+      targetPort: {{ .Values.observability.metrics.port }}
+      protocol: TCP
+      name: metrics
+    {{- end }}
   selector:
     app: {{ .Release.Name }}
