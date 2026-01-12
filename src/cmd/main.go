@@ -15,6 +15,7 @@ import (
 	grpcapi "ai-speech-ingress-service/internal/api/grpc"
 	"ai-speech-ingress-service/internal/config"
 	"ai-speech-ingress-service/internal/events"
+	"ai-speech-ingress-service/internal/service/audio"
 )
 
 func main() {
@@ -43,8 +44,13 @@ func main() {
 	healthServer.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
 	healthServer.SetServingStatus("ai.speech.ingress.AudioStreamService", grpc_health_v1.HealthCheckResponse_SERVING)
 
-	// Register application services
-	grpcapi.Register(server, publisher, cfg.STTProvider)
+	// Register application services with segment limits for backpressure safety
+	limits := audio.SegmentLimits{
+		MaxAudioBytes: cfg.SegmentLimits.MaxAudioBytes,
+		MaxDuration:   cfg.SegmentLimits.MaxDuration,
+		MaxPartials:   cfg.SegmentLimits.MaxPartials,
+	}
+	grpcapi.RegisterWithLimits(server, publisher, cfg.STTProvider, limits)
 
 	// Enable gRPC reflection for debugging tools like grpcurl
 	reflection.Register(server)
