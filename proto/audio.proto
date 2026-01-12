@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package ai.speech.ingress;
+option go_package = "ai-speech-ingress-service/proto;proto";
+
+service AudioStreamService {
+  rpc StreamAudio(stream AudioFrame) returns (StreamAck);
+}
+
+message AudioFrame {
+  string interactionId = 1;
+  string tenantId = 2;
+  bytes audio = 3;
+  int64 audioOffsetMs = 4;
+  bool endOfUtterance = 5;
+}
+
+message StreamAck {
+  string interactionId = 1;
+}
