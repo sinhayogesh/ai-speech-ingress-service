@@ -78,12 +78,64 @@ type Callback interface {
 | Mock | `stt/mock/adapter.go` | Cycles through 5 sample utterances |
 | Google | `stt/google/adapter.go` | Uses `SingleUtterance` mode |
 
-#### 4. Segment Generator (`internal/service/segment/`)
+#### 4. Segment Generator & Lifecycle (`internal/service/segment/`)
 
-Thread-safe generator for unique segment IDs:
+**Generator** - Thread-safe generator for unique segment IDs:
 - Format: `{interactionId}-seg-{n}`
 - Uses atomic counter for uniqueness
 - Shared across all streams for a given interaction
+
+**Lifecycle State Machine** - Explicit state management for segments:
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                    Segment Lifecycle                           │
+├────────────────────────────────────────────────────────────────┤
+│                                                                │
+│   ┌──────────┐    EmitFinal()    ┌────────────────┐           │
+│   │   OPEN   │──────────────────▶│ FINAL_EMITTED  │           │
+│   └──────────┘                   └────────────────┘           │
+│        │                                │                      │
+│        │ EmitPartial()                  │                      │
+│        │ (multiple)                     │                      │
+│        ▼                                │                      │
+│   [emit partial]                        │                      │
+│                                         │                      │
+│        │                                │                      │
+│        │ Close()                        │ Close()              │
+│        ▼                                ▼                      │
+│   ┌──────────────────────────────────────────┐                │
+│   │                 CLOSED                    │                │
+│   │         (ignore all events)               │                │
+│   └──────────────────────────────────────────┘                │
+│                                                                │
+└────────────────────────────────────────────────────────────────┘
+```
+
+**States:**
+
+| State | Can Emit Partial | Can Emit Final | Description |
+|-------|-----------------|----------------|-------------|
+| `OPEN` | ✅ Yes (multiple) | ✅ Yes (once) | Active segment |
+| `FINAL_EMITTED` | ❌ No | ❌ No | Final sent, waiting to close |
+| `CLOSED` | ❌ No | ❌ No | Segment complete, ignore events |
+
+**Rules enforced:**
+- Partials only in OPEN state
+- Final only once (OPEN → FINAL_EMITTED)
+- No events after CLOSED
+- Thread-safe via mutex
+
+**Code:**
+
+```go
+// Validate before emitting
+if err := h.lifecycle.EmitPartial(); err != nil {
+    log.Printf("OnPartial ignored: state=%s err=%v", h.lifecycle.State(), err)
+    return
+}
+// ... emit event
+```
 
 #### 5. Event Publisher (`internal/events/`)
 
