@@ -1,4 +1,5 @@
 // Package google provides a Google Cloud Speech-to-Text adapter.
+// Supports streaming recognition with utterance boundary detection.
 package google
 
 import (
