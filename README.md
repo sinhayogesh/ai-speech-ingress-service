@@ -108,6 +108,8 @@ ai-speech-ingress-service/
 │   └── kafka-ui.yaml           # Kafka UI deployment
 ├── proto/
 │   └── audio.proto             # gRPC service definition
+├── tools/
+│   └── transcript-viewer/      # Real-time transcript UI (web app)
 ├── src/
 │   ├── cmd/
 │   │   ├── main.go             # Service entry point
@@ -173,6 +175,26 @@ go run ./cmd/audioclient -audio=/path/to/audio.wav -server=localhost:50051
 ```
 
 The audio client streams WAV files in real-time (100ms chunks) and works with both mock and Google STT providers. Audio must be **16-bit PCM, mono, 8kHz** (telephony standard).
+
+### Real-Time Transcript Viewer
+
+A web-based UI to visualize transcripts as they stream:
+
+```bash
+# Start the viewer (requires Kafka port-forward)
+make transcript-viewer
+
+# Open http://localhost:8081 in browser
+```
+
+Features:
+- **Live updates** via WebSocket
+- **Dual-topic view** - Shows partials (purple) and finals (green)
+- **Segment tracking** - Groups by segment ID
+- **Confidence bars** - Visual confidence display
+- **Filtering** - Filter by interaction ID
+
+See [tools/transcript-viewer/README.md](tools/transcript-viewer/README.md) for details.
 
 ## Configuration
 
@@ -474,6 +496,7 @@ curl http://localhost:9090/healthz
 | `make run` | Run the service locally |
 | `make test-client` | Run the simple test gRPC client |
 | `make audio-test` | Stream real audio file to service |
+| `make transcript-viewer` | Run real-time transcript viewer UI |
 | `make build` | Build the service binary |
 | `make proto` | Generate protobuf code |
 | `make proto-install` | Install protoc plugins |
