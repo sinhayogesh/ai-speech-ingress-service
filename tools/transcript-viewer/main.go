@@ -42,6 +42,13 @@ type Hub struct {
 	mu         sync.RWMutex
 }
 
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
 func newHub() *Hub {
 	return &Hub{
 		clients:    make(map[*websocket.Conn]bool),
@@ -115,16 +122,20 @@ func wsHandler(hub *Hub) http.HandlerFunc {
 }
 
 func consumeKafka(ctx context.Context, hub *Hub, brokers, topic string) {
+	// Use partition reader without consumer group (works better through port-forward)
 	reader := kafka.NewReader(kafka.ReaderConfig{
-		Brokers:        strings.Split(brokers, ","),
-		Topic:          topic,
-		GroupID:        "transcript-viewer-" + topic,
-		StartOffset:    kafka.LastOffset, // Only new messages
-		CommitInterval: time.Second,
+		Brokers:   strings.Split(brokers, ","),
+		Topic:     topic,
+		Partition: 0, // Read from partition 0 only (simplest for demo)
+		MinBytes:  1,
+		MaxBytes:  10e6,
 	})
 	defer reader.Close()
 
-	log.Printf("Consuming from Kafka topic: %s", topic)
+	// Start from the latest offset (only show new messages)
+	reader.SetOffsetAt(ctx, time.Now().Add(-1*time.Hour)) // Last hour of messages
+
+	log.Printf("Consuming from Kafka topic: %s partition 0 (last hour)", topic)
 
 	for {
 		select {
@@ -147,6 +158,7 @@ func consumeKafka(ctx context.Context, hub *Hub, brokers, topic string) {
 				continue
 			}
 
+			log.Printf("📨 Received %s: %s (segment: %s)", event.EventType, truncate(event.Text, 40), event.SegmentID)
 			hub.broadcast <- event
 		}
 	}
