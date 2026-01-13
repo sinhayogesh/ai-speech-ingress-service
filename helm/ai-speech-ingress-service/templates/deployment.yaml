@@ -41,9 +41,20 @@ spec:
               value: "{{ .Values.observability.logging.level }}"
             - name: LOG_FORMAT
               value: "{{ .Values.observability.logging.format }}"
+            # Service Identity
+            - name: SERVICE_PRINCIPAL
+              value: "{{ .Values.service.principal }}"
             # STT Provider
             - name: STT_PROVIDER
-              value: "{{ .Values.sttProvider }}"
+              value: "{{ .Values.stt.provider }}"
+            - name: STT_LANGUAGE_CODE
+              value: "{{ .Values.stt.languageCode }}"
+            - name: STT_SAMPLE_RATE_HZ
+              value: "{{ .Values.stt.sampleRateHz }}"
+            - name: STT_INTERIM_RESULTS
+              value: "{{ .Values.stt.interimResults }}"
+            - name: STT_AUDIO_ENCODING
+              value: "{{ .Values.stt.audioEncoding }}"
             # Kafka
             - name: KAFKA_ENABLED
               value: "{{ .Values.kafka.enabled }}"
@@ -81,10 +92,10 @@ spec:
           resources:
             requests:
               cpu: 100m
-              memory: 128Mi
-            limits:
-              cpu: 500m
               memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi
           terminationMessagePath: /dev/termination-log
           terminationMessagePolicy: File
       restartPolicy: Always

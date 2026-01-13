@@ -51,6 +51,9 @@ type Handler struct {
 	tenantId          string
 	lastAudioOffsetMs int64
 
+	// Stream context for adapter restart
+	ctx context.Context
+
 	// Segment lifecycle state machine
 	lifecycle *segment.Lifecycle
 
@@ -66,6 +69,15 @@ type Handler struct {
 	mu                  sync.RWMutex
 	onSegmentTransition SegmentTransitionCallback
 	utteranceCount      int
+
+	// Utterance boundary tracking
+	// When END_OF_SINGLE_UTTERANCE is received, we need to wait for the final
+	// before restarting, otherwise we'll have two Listen goroutines racing.
+	pendingRestart bool
+
+	// Continuous mode creates new segments after each final (no OnEndOfUtterance needed)
+	// This is used when SingleUtterance=false - Google sends multiple finals per stream
+	continuousMode bool
 
 	// Observability
 	metrics *metrics.Metrics
@@ -123,9 +135,19 @@ func (h *Handler) SetSegmentTransitionCallback(cb SegmentTransitionCallback) {
 	h.onSegmentTransition = cb
 }
 
+// SetContinuousMode enables continuous mode where each final creates a new segment.
+// This is used when SingleUtterance=false - Google sends multiple finals per stream
+// without END_OF_SINGLE_UTTERANCE events.
+func (h *Handler) SetContinuousMode(enabled bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.continuousMode = enabled
+}
+
 // Start begins the STT session with this handler as the callback receiver.
 func (h *Handler) Start(ctx context.Context) error {
 	h.logger.Info().Msg("Starting audio handler")
+	h.ctx = ctx // Store context for adapter restart on utterance boundaries
 	return h.adapter.Start(ctx, h)
 }
 
@@ -233,6 +255,8 @@ func (h *Handler) OnPartial(text string) {
 
 // OnFinal is called when a final transcript is received.
 // Only emits once per segment, transitions to FINAL_EMITTED state.
+// If a restart is pending (from OnEndOfUtterance), this triggers the
+// segment transition and adapter restart after processing the final.
 func (h *Handler) OnFinal(text string, confidence float64) {
 	// Validate state transition - this also transitions to FINAL_EMITTED
 	if err := h.lifecycle.EmitFinal(); err != nil {
@@ -270,19 +294,35 @@ func (h *Handler) OnFinal(text string, confidence float64) {
 		Msg("Final transcript received")
 
 	h.publishFinal(ev)
+
+	// Check if we need to restart for the next utterance
+	// This happens after OnEndOfUtterance was received (SingleUtterance mode)
+	h.mu.Lock()
+	needsRestart := h.pendingRestart
+	h.pendingRestart = false
+	isContinuousMode := h.continuousMode
+	h.mu.Unlock()
+
+	if needsRestart {
+		// SingleUtterance mode: restart adapter for next utterance
+		h.handleUtteranceTransition()
+	} else if isContinuousMode {
+		// Continuous mode: create new segment but don't restart adapter
+		// (Google keeps streaming in the same session)
+		h.handleContinuousModeTransition()
+	}
 }
 
-// OnEndOfUtterance is called when the STT provider detects end of speech.
-// This signals the boundary between utterances within a conversation.
-// The handler closes the current segment and creates a new one.
-func (h *Handler) OnEndOfUtterance() {
+// handleContinuousModeTransition creates a new segment after a final in continuous mode.
+// Unlike handleUtteranceTransition, this doesn't restart the adapter since Google
+// continues transcribing in the same session.
+func (h *Handler) handleContinuousModeTransition() {
 	oldSegmentId := h.lifecycle.SegmentId()
-	oldState := h.lifecycle.State()
 
 	// Close current segment
 	h.lifecycle.Close()
 
-	// Generate new segment ID and reset lifecycle + metrics
+	// Generate new segment ID and reset metrics
 	h.mu.Lock()
 	h.utteranceCount++
 	oldAudioBytes := h.audioBytes
@@ -313,6 +353,61 @@ func (h *Handler) OnEndOfUtterance() {
 	// Update logger context
 	h.logger = h.logger.With().Str("segmentId", newSegmentId).Logger()
 
+	h.logger.Debug().
+		Str("oldSegmentId", oldSegmentId).
+		Int("utteranceCount", h.utteranceCount).
+		Int64("audioBytes", oldAudioBytes).
+		Int("partialCount", oldPartialCount).
+		Dur("duration", oldDuration).
+		Msg("Continuous mode - new segment created after final")
+
+	// Notify server of segment transition if callback is set
+	if cb != nil {
+		cb(newSegmentId)
+	}
+}
+
+// handleUtteranceTransition manages the segment transition and adapter restart
+// after an utterance boundary is detected and the final has been processed.
+func (h *Handler) handleUtteranceTransition() {
+	oldSegmentId := h.lifecycle.SegmentId()
+	oldState := h.lifecycle.State()
+
+	// Close current segment
+	h.lifecycle.Close()
+
+	// Generate new segment ID and reset metrics
+	h.mu.Lock()
+	h.utteranceCount++
+	oldAudioBytes := h.audioBytes
+	oldPartialCount := h.partialCount
+	oldDuration := time.Since(h.segmentStartTime)
+
+	// Reset segment metrics for new segment
+	h.audioBytes = 0
+	h.partialCount = 0
+	h.segmentStartTime = time.Now()
+
+	var newSegmentId string
+	if h.segmentGen != nil {
+		newSegmentId = h.segmentGen.Next(h.interactionId)
+	} else {
+		newSegmentId = oldSegmentId + "-next"
+	}
+	cb := h.onSegmentTransition
+	ctx := h.ctx
+	h.mu.Unlock()
+
+	// Reset lifecycle for new segment
+	h.lifecycle.Reset(newSegmentId)
+
+	// Record metrics
+	h.metrics.RecordUtterance()
+	h.metrics.RecordSegmentCreated()
+
+	// Update logger context
+	h.logger = h.logger.With().Str("segmentId", newSegmentId).Logger()
+
 	h.logger.Info().
 		Str("oldSegmentId", oldSegmentId).
 		Str("oldState", oldState.String()).
@@ -320,12 +415,42 @@ func (h *Handler) OnEndOfUtterance() {
 		Int64("audioBytes", oldAudioBytes).
 		Int("partialCount", oldPartialCount).
 		Dur("duration", oldDuration).
-		Msg("End of utterance - new segment created")
+		Msg("Utterance complete - new segment created")
+
+	// Restart the STT adapter for the next utterance
+	// This is required for providers like Google with SingleUtterance mode
+	if ctx != nil {
+		if err := h.adapter.Restart(ctx); err != nil {
+			h.logger.Error().
+				Err(err).
+				Str("segmentId", newSegmentId).
+				Msg("Failed to restart STT adapter")
+		} else {
+			h.logger.Debug().
+				Str("segmentId", newSegmentId).
+				Msg("STT adapter restarted for next utterance")
+		}
+	}
 
 	// Notify server of segment transition if callback is set
 	if cb != nil {
 		cb(newSegmentId)
 	}
+}
+
+// OnEndOfUtterance is called when the STT provider detects end of speech.
+// This signals the boundary between utterances within a conversation.
+// Note: With Google's SingleUtterance mode, END_OF_SINGLE_UTTERANCE comes BEFORE
+// the final result. We must wait for OnFinal before restarting, to avoid
+// two Listen goroutines racing (old one sending final, new one sending partials).
+func (h *Handler) OnEndOfUtterance() {
+	h.mu.Lock()
+	h.pendingRestart = true
+	h.mu.Unlock()
+
+	h.logger.Debug().
+		Str("segmentId", h.lifecycle.SegmentId()).
+		Msg("End of utterance detected - will restart after final")
 }
 
 // OnError is called when an STT error occurs.
@@ -404,7 +529,11 @@ func (h *Handler) GetSegmentMetrics() SegmentMetrics {
 }
 
 func (h *Handler) publishPartial(ev models.TranscriptPartial) {
-	ctx := context.Background()
+	// Use a timeout context for publishing - don't use stream context
+	// because stream may close before publish completes
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	if err := h.publisher.PublishPartial(ctx, h.interactionId, ev); err != nil {
 		h.logger.Error().
 			Err(err).
@@ -414,7 +543,11 @@ func (h *Handler) publishPartial(ev models.TranscriptPartial) {
 }
 
 func (h *Handler) publishFinal(ev models.TranscriptFinal) {
-	ctx := context.Background()
+	// Use a timeout context for publishing - don't use stream context
+	// because stream may close before publish completes
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	if err := h.publisher.PublishFinal(ctx, h.interactionId, ev); err != nil {
 		h.logger.Error().
 			Err(err).

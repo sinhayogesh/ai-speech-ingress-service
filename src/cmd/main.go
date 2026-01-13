@@ -97,19 +97,12 @@ func main() {
 	healthServer.SetServingStatus("ai.speech.ingress.AudioStreamService", grpc_health_v1.HealthCheckResponse_SERVING)
 
 	// Register application services with STT config and segment limits
-	sttCfg := grpcapi.STTConfig{
-		Provider:       cfg.STT.Provider,
-		LanguageCode:   cfg.STT.LanguageCode,
-		SampleRateHz:   cfg.STT.SampleRateHz,
-		InterimResults: cfg.STT.InterimResults,
-		AudioEncoding:  cfg.STT.AudioEncoding,
-	}
 	limits := audio.SegmentLimits{
 		MaxAudioBytes: cfg.SegmentLimits.MaxAudioBytes,
 		MaxDuration:   cfg.SegmentLimits.MaxDuration,
 		MaxPartials:   cfg.SegmentLimits.MaxPartials,
 	}
-	grpcapi.RegisterWithConfig(server, publisher, sttCfg, limits)
+	grpcapi.RegisterWithConfig(server, publisher, cfg.STT, limits)
 
 	// Enable gRPC reflection for debugging tools like grpcurl
 	reflection.Register(server)

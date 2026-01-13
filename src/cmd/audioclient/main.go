@@ -25,7 +25,7 @@ const chunkSize = 1600
 const chunkIntervalMs = 100
 
 func main() {
-	audioFile := flag.String("audio", "../../testdata/sample-8khz.wav", "Path to WAV file (8kHz 16-bit mono)")
+	audioFile := flag.String("audio", "../testdata/sample-8khz.wav", "Path to WAV file (8kHz 16-bit mono)")
 	serverAddr := flag.String("server", "localhost:50051", "gRPC server address")
 	interactionId := flag.String("interaction", "test-audio-"+time.Now().Format("150405"), "Interaction ID")
 	tenantId := flag.String("tenant", "tenant-demo", "Tenant ID")
@@ -128,8 +128,13 @@ func main() {
 	elapsed := time.Since(startTime)
 	log.Printf("Finished streaming: %d chunks, %d bytes in %v", chunkNum, totalBytes, elapsed)
 
+	// Wait for Google STT to finish processing buffered audio
+	// Google needs time to transcribe remaining utterances after audio ends
+	log.Println("Waiting for STT to finish processing...")
+	time.Sleep(10 * time.Second)
+
 	// Close stream and wait for response
-	log.Println("Closing stream, waiting for final transcripts...")
+	log.Println("Closing stream...")
 
 	ack, err := stream.CloseAndRecv()
 	if err != nil {

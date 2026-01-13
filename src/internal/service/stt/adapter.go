@@ -31,6 +31,12 @@ type Adapter interface {
 	// SendAudio sends audio bytes to the STT provider.
 	SendAudio(ctx context.Context, audio []byte) error
 
+	// Restart closes the current session and starts a new one.
+	// Used after OnEndOfUtterance to continue transcribing subsequent speech.
+	// For providers like Google with SingleUtterance mode, this is required
+	// to transcribe multiple utterances in a single audio stream.
+	Restart(ctx context.Context) error
+
 	// Close ends the session and releases resources.
 	Close() error
 }

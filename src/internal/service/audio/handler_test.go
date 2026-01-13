@@ -29,6 +29,12 @@ func (m *testAdapter) SendAudio(ctx context.Context, audio []byte) error {
 	return nil
 }
 
+func (m *testAdapter) Restart(ctx context.Context) error {
+	// Reset state for new utterance
+	m.audio = nil
+	return nil
+}
+
 func (m *testAdapter) Close() error {
 	m.closed = true
 	return nil
@@ -161,8 +167,10 @@ func TestHandler_MetricsReset(t *testing.T) {
 		t.Errorf("Expected 2 partials, got %d", metrics.PartialCount)
 	}
 
-	// Simulate end of utterance - metrics should reset
+	// Simulate end of utterance followed by final
+	// OnEndOfUtterance sets pendingRestart flag, OnFinal triggers the actual reset
 	handler.OnEndOfUtterance()
+	handler.OnFinal("final text", 0.95)
 
 	metrics = handler.GetSegmentMetrics()
 	if metrics.AudioBytes != 0 {

@@ -5,14 +5,14 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log"
 
+	"github.com/rs/zerolog/log"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"ai-speech-ingress-service/internal/config"
 	"ai-speech-ingress-service/internal/events"
-	"ai-speech-ingress-service/internal/schema"
 	"ai-speech-ingress-service/internal/service/audio"
 	"ai-speech-ingress-service/internal/service/segment"
 	"ai-speech-ingress-service/internal/service/stt"
@@ -21,59 +21,59 @@ import (
 	pb "ai-speech-ingress-service/proto"
 )
 
-// STTConfig holds STT provider configuration.
-type STTConfig struct {
-	Provider       string
-	LanguageCode   string
-	SampleRateHz   int
-	InterimResults bool
-	AudioEncoding  string
-}
-
 // Server implements the AudioStreamService gRPC service.
 type Server struct {
 	pb.UnimplementedAudioStreamServiceServer
 	segments      *segment.Generator
 	publisher     *events.Publisher
-	validator     *schema.Validator
-	sttConfig     STTConfig
+	sttConfig     config.STTConfig
 	segmentLimits audio.SegmentLimits
 }
 
 // Register creates a new Server and registers it with the gRPC server using defaults.
 func Register(g *grpc.Server, publisher *events.Publisher, sttProvider string) {
-	RegisterWithConfig(g, publisher, STTConfig{Provider: sttProvider}, audio.DefaultLimits())
+	RegisterWithConfig(g, publisher, config.STTConfig{Provider: sttProvider}, audio.DefaultLimits())
 }
 
 // RegisterWithLimits creates a new Server with custom segment limits (legacy, use RegisterWithConfig).
 func RegisterWithLimits(g *grpc.Server, publisher *events.Publisher, sttProvider string, limits audio.SegmentLimits) {
-	RegisterWithConfig(g, publisher, STTConfig{Provider: sttProvider}, limits)
+	RegisterWithConfig(g, publisher, config.STTConfig{Provider: sttProvider}, limits)
 }
 
 // RegisterWithConfig creates a new Server with full STT config and segment limits.
-func RegisterWithConfig(g *grpc.Server, publisher *events.Publisher, sttCfg STTConfig, limits audio.SegmentLimits) {
+func RegisterWithConfig(g *grpc.Server, publisher *events.Publisher, sttCfg config.STTConfig, limits audio.SegmentLimits) {
 	// Apply defaults for any unset STT config values
 	if sttCfg.LanguageCode == "" {
-		sttCfg.LanguageCode = "en-US"
+		sttCfg.LanguageCode = config.DefaultLanguageCode
 	}
 	if sttCfg.SampleRateHz == 0 {
-		sttCfg.SampleRateHz = 8000
+		sttCfg.SampleRateHz = config.DefaultSampleRateHz
 	}
 	if sttCfg.AudioEncoding == "" {
-		sttCfg.AudioEncoding = "LINEAR16"
+		sttCfg.AudioEncoding = config.DefaultAudioEncoding
 	}
 
 	s := &Server{
 		segments:      segment.New(),
 		publisher:     publisher,
-		validator:     schema.New(),
 		sttConfig:     sttCfg,
 		segmentLimits: limits,
 	}
-	log.Printf("STT config: provider=%s lang=%s sampleRate=%d interim=%v encoding=%s",
-		sttCfg.Provider, sttCfg.LanguageCode, sttCfg.SampleRateHz, sttCfg.InterimResults, sttCfg.AudioEncoding)
-	log.Printf("Segment limits: maxAudioBytes=%d maxDuration=%v maxPartials=%d",
-		limits.MaxAudioBytes, limits.MaxDuration, limits.MaxPartials)
+
+	log.Info().
+		Str("provider", sttCfg.Provider).
+		Str("language", sttCfg.LanguageCode).
+		Int("sampleRate", sttCfg.SampleRateHz).
+		Bool("interim", sttCfg.InterimResults).
+		Str("encoding", sttCfg.AudioEncoding).
+		Msg("STT config initialized")
+
+	log.Info().
+		Int64("maxAudioBytes", limits.MaxAudioBytes).
+		Dur("maxDuration", limits.MaxDuration).
+		Int("maxPartials", limits.MaxPartials).
+		Msg("Segment limits configured")
+
 	pb.RegisterAudioStreamServiceServer(g, s)
 }
 
@@ -93,12 +93,16 @@ func (s *Server) StreamAudio(stream pb.AudioStreamService_StreamAudioServer) err
 	tenantId := frame.TenantId
 	segmentId := s.segments.Next(interactionId)
 
-	log.Printf("Starting stream: interactionId=%s tenantId=%s segmentId=%s", interactionId, tenantId, segmentId)
+	log.Info().
+		Str("interactionId", interactionId).
+		Str("tenantId", tenantId).
+		Str("segmentId", segmentId).
+		Msg("Starting stream")
 
 	// Create and initialize STT adapter
 	adapter, err := s.createSTTAdapter(ctx)
 	if err != nil {
-		log.Printf("Failed to create STT adapter: %v", err)
+		log.Error().Err(err).Msg("Failed to create STT adapter")
 		return err
 	}
 
@@ -107,9 +111,15 @@ func (s *Server) StreamAudio(stream pb.AudioStreamService_StreamAudioServer) err
 	// Use configured limits for backpressure safety
 	handler := audio.NewHandlerWithLimits(adapter, s.publisher, s.segments, interactionId, tenantId, segmentId, s.segmentLimits)
 
+	// Enable continuous mode when SingleUtterance is disabled
+	// In this mode, each final creates a new segment automatically
+	if !s.sttConfig.SingleUtterance {
+		handler.SetContinuousMode(true)
+	}
+
 	// Start the STT streaming session
 	if err := handler.Start(ctx); err != nil {
-		log.Printf("Failed to start STT session: %v", err)
+		log.Error().Err(err).Msg("Failed to start STT session")
 		return err
 	}
 	defer handler.Close()
@@ -122,7 +132,7 @@ func (s *Server) StreamAudio(stream pb.AudioStreamService_StreamAudioServer) err
 	// Send first frame's audio if present
 	if len(frame.Audio) > 0 {
 		if err := handler.SendAudio(ctx, frame.Audio, frame.AudioOffsetMs); err != nil {
-			log.Printf("Failed to send audio: %v", err)
+			log.Error().Err(err).Msg("Failed to send audio")
 			return err
 		}
 	}
@@ -138,8 +148,11 @@ func (s *Server) StreamAudio(stream pb.AudioStreamService_StreamAudioServer) err
 			// Handle client disconnect or stream errors
 			// "Silence > bad data" - drop the segment, emit no final
 			handler.DropSegment(classifyStreamError(err))
-			log.Printf("Stream error (segment dropped): interactionId=%s segmentId=%s err=%v",
-				interactionId, handler.GetSegmentId(), err)
+			log.Warn().
+				Err(err).
+				Str("interactionId", interactionId).
+				Str("segmentId", handler.GetSegmentId()).
+				Msg("Stream error (segment dropped)")
 			// Return nil to avoid double-logging; segment is already dropped
 			return nil
 		}
@@ -147,16 +160,22 @@ func (s *Server) StreamAudio(stream pb.AudioStreamService_StreamAudioServer) err
 		// Check for context cancellation (client disconnect)
 		if ctx.Err() != nil {
 			handler.DropSegment("context cancelled: " + ctx.Err().Error())
-			log.Printf("Context cancelled (segment dropped): interactionId=%s segmentId=%s err=%v",
-				interactionId, handler.GetSegmentId(), ctx.Err())
+			log.Warn().
+				Err(ctx.Err()).
+				Str("interactionId", interactionId).
+				Str("segmentId", handler.GetSegmentId()).
+				Msg("Context cancelled (segment dropped)")
 			return nil
 		}
 
 		if len(frame.Audio) > 0 {
 			if err := handler.SendAudio(ctx, frame.Audio, frame.AudioOffsetMs); err != nil {
 				handler.DropSegment("send audio failed: " + err.Error())
-				log.Printf("Failed to send audio (segment dropped): interactionId=%s segmentId=%s err=%v",
-					interactionId, handler.GetSegmentId(), err)
+				log.Warn().
+					Err(err).
+					Str("interactionId", interactionId).
+					Str("segmentId", handler.GetSegmentId()).
+					Msg("Failed to send audio (segment dropped)")
 				return nil
 			}
 		}
@@ -169,11 +188,18 @@ func (s *Server) StreamAudio(stream pb.AudioStreamService_StreamAudioServer) err
 	// Log final state
 	finalState := handler.GetSegmentState()
 	if handler.IsSegmentDropped() {
-		log.Printf("Stream ended with DROPPED segment: interactionId=%s segmentId=%s state=%s",
-			interactionId, handler.GetSegmentId(), finalState)
+		log.Warn().
+			Str("interactionId", interactionId).
+			Str("segmentId", handler.GetSegmentId()).
+			Str("state", finalState.String()).
+			Msg("Stream ended with DROPPED segment")
 	} else {
-		log.Printf("Stream completed: interactionId=%s segmentId=%s state=%s utterances=%d",
-			interactionId, handler.GetSegmentId(), finalState, handler.GetUtteranceCount())
+		log.Info().
+			Str("interactionId", interactionId).
+			Str("segmentId", handler.GetSegmentId()).
+			Str("state", finalState.String()).
+			Int("utterances", handler.GetUtteranceCount()).
+			Msg("Stream completed")
 	}
 
 	return stream.SendAndClose(&pb.StreamAck{InteractionId: interactionId})
@@ -184,16 +210,19 @@ func (s *Server) createSTTAdapter(ctx context.Context) (stt.Adapter, error) {
 	switch s.sttConfig.Provider {
 	case "google":
 		cfg := google.Config{
-			LanguageCode:   s.sttConfig.LanguageCode,
-			SampleRateHz:   s.sttConfig.SampleRateHz,
-			InterimResults: s.sttConfig.InterimResults,
-			AudioEncoding:  s.sttConfig.AudioEncoding,
+			LanguageCode:    s.sttConfig.LanguageCode,
+			SampleRateHz:    s.sttConfig.SampleRateHz,
+			InterimResults:  s.sttConfig.InterimResults,
+			AudioEncoding:   s.sttConfig.AudioEncoding,
+			SingleUtterance: s.sttConfig.SingleUtterance,
 		}
 		return google.NewWithConfig(ctx, cfg)
 	case "mock":
 		return mock.New(), nil
 	default:
-		log.Printf("Unknown STT provider '%s', using mock", s.sttConfig.Provider)
+		log.Warn().
+			Str("provider", s.sttConfig.Provider).
+			Msg("Unknown STT provider, using mock")
 		return mock.New(), nil
 	}
 }
