@@ -77,16 +77,30 @@ func (h *Hub) run() {
 			log.Printf("Client disconnected. Total: %d", len(h.clients))
 
 		case event := <-h.broadcast:
-			h.mu.RLock()
+			h.mu.Lock()
+			clientCount := len(h.clients)
+			if clientCount == 0 {
+				h.mu.Unlock()
+				continue
+			}
+			var failedConns []*websocket.Conn
 			for conn := range h.clients {
 				err := conn.WriteJSON(event)
 				if err != nil {
 					log.Printf("Write error: %v", err)
-					conn.Close()
-					delete(h.clients, conn)
+					failedConns = append(failedConns, conn)
 				}
 			}
-			h.mu.RUnlock()
+			// Remove failed connections after iteration
+			for _, conn := range failedConns {
+				delete(h.clients, conn)
+				conn.Close()
+			}
+			successCount := clientCount - len(failedConns)
+			if event.EventType == "interaction.transcript.final" {
+				log.Printf("✉️  Sent final to %d clients: %s", successCount, truncate(event.Text, 30))
+			}
+			h.mu.Unlock()
 		}
 	}
 }

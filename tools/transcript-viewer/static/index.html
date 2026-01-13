@@ -529,15 +529,22 @@
             };
 
             ws.onmessage = (event) => {
-                const data = JSON.parse(event.data);
-                handleTranscript(data);
+                try {
+                    const data = JSON.parse(event.data);
+                    console.log('Received:', data.eventType, data.segmentId, data.text?.substring(0, 30));
+                    handleTranscript(data);
+                } catch (e) {
+                    console.error('Parse error:', e, event.data);
+                }
             };
         }
 
         function handleTranscript(data) {
-            // Hide empty state
-            document.getElementById('empty-state').style.display = 'none';
-            document.getElementById('segment-empty').style.display = 'none';
+            // Hide empty state (check for null in case elements were removed)
+            const emptyState = document.getElementById('empty-state');
+            const segmentEmpty = document.getElementById('segment-empty');
+            if (emptyState) emptyState.style.display = 'none';
+            if (segmentEmpty) segmentEmpty.style.display = 'none';
 
             // Update counts
             if (data.eventType === 'interaction.transcript.partial') {
@@ -666,14 +673,23 @@
             document.getElementById('final-count').textContent = '0';
             document.getElementById('segment-count').textContent = '0';
             
+            // Recreate empty states since innerHTML = '' destroys them
             const list = document.getElementById('transcript-list');
-            list.innerHTML = '';
-            document.getElementById('empty-state').style.display = 'flex';
-            list.appendChild(document.getElementById('empty-state'));
+            list.innerHTML = `
+                <div class="empty-state" id="empty-state">
+                    <span class="empty-state-icon">🔇</span>
+                    <div class="empty-state-text">Waiting for transcripts...</div>
+                    <div class="empty-state-hint">Start streaming audio to see live transcription</div>
+                </div>
+            `;
             
-            document.getElementById('segment-list').innerHTML = '';
-            document.getElementById('segment-empty').style.display = 'flex';
-            document.getElementById('segment-list').appendChild(document.getElementById('segment-empty'));
+            const segmentList = document.getElementById('segment-list');
+            segmentList.innerHTML = `
+                <div class="empty-state" id="segment-empty">
+                    <span class="empty-state-icon">📭</span>
+                    <div class="empty-state-text">No segments yet</div>
+                </div>
+            `;
         }
 
         function escapeHtml(text) {
