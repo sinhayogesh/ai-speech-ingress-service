@@ -598,6 +598,8 @@
         let fullTranscriptFinals = [];  // Array of final transcript texts
         let currentPartialText = '';     // Current partial being spoken
         let currentPartialSegment = '';  // Track which segment the partial belongs to
+        let displayedPartialText = '';   // What's currently shown (for typing effect)
+        let typingTimer = null;          // Timer for typing effect
 
         function connect() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -774,6 +776,11 @@
             fullTranscriptFinals = [];
             currentPartialText = '';
             currentPartialSegment = '';
+            displayedPartialText = '';
+            if (typingTimer) {
+                clearTimeout(typingTimer);
+                typingTimer = null;
+            }
             
             document.getElementById('partial-count').textContent = '0';
             document.getElementById('final-count').textContent = '0';
@@ -813,8 +820,48 @@
             
             if (fullTranscriptFinals.length === 0 && !currentPartialText) {
                 container.innerHTML = '<span class="full-transcript-empty">Start streaming audio to see the complete transcription here...</span>';
+                displayedPartialText = '';
                 return;
             }
+            
+            // Start typing effect for partial
+            if (currentPartialText !== displayedPartialText) {
+                startTypingEffect();
+            } else {
+                renderFullTranscript();
+            }
+        }
+        
+        function startTypingEffect() {
+            // Clear any existing timer
+            if (typingTimer) {
+                clearTimeout(typingTimer);
+            }
+            
+            // If the new partial is shorter (user corrected), just show it immediately
+            if (currentPartialText.length < displayedPartialText.length || 
+                !currentPartialText.startsWith(displayedPartialText.substring(0, Math.min(displayedPartialText.length, currentPartialText.length - 5)))) {
+                displayedPartialText = currentPartialText;
+                renderFullTranscript();
+                return;
+            }
+            
+            // Type out character by character
+            function typeNextChar() {
+                if (displayedPartialText.length < currentPartialText.length) {
+                    // Add next few characters (type 2-3 chars at a time for smoother effect)
+                    const charsToAdd = Math.min(3, currentPartialText.length - displayedPartialText.length);
+                    displayedPartialText = currentPartialText.substring(0, displayedPartialText.length + charsToAdd);
+                    renderFullTranscript();
+                    typingTimer = setTimeout(typeNextChar, 30); // 30ms per batch = ~100 chars/sec
+                }
+            }
+            
+            typeNextChar();
+        }
+        
+        function renderFullTranscript() {
+            const container = document.getElementById('full-transcript');
             
             // Build the full transcript text
             let html = '';
@@ -825,9 +872,9 @@
                 html += `<span class="final-text">${escapeHtml(finalText)}</span>`;
             }
             
-            // Add current partial with special styling
-            if (currentPartialText) {
-                html += `<span class="partial-text">${escapeHtml(currentPartialText)}</span>`;
+            // Add current partial with special styling (show typed portion)
+            if (displayedPartialText) {
+                html += `<span class="partial-text">${escapeHtml(displayedPartialText)}</span>`;
             }
             
             // Add blinking cursor
