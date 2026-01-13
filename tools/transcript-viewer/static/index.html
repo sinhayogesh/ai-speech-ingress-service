@@ -436,7 +436,7 @@
             border: 1px solid var(--border);
             border-radius: var(--radius);
             margin-bottom: 24px;
-            max-height: 280px;
+            max-height: 180px;
             display: flex;
             flex-direction: column;
         }
@@ -899,7 +899,7 @@
             // Build the full transcript text
             let html = '';
             
-            // Add all finals as separate sentences with periods and line breaks
+            // Add all finals as a flowing paragraph with periods
             if (fullTranscriptFinals.length > 0) {
                 fullTranscriptFinals.forEach((text, index) => {
                     // Clean up text and ensure it ends with proper punctuation
@@ -913,18 +913,18 @@
                         sentence += '.';
                     }
                     html += `<span class="final-text">${escapeHtml(sentence)}</span>`;
-                    // Add line break after each sentence except the last (if there's a partial coming)
+                    // Add space after sentence (not line break)
                     if (index < fullTranscriptFinals.length - 1) {
-                        html += '<br><br>';
+                        html += ' ';
                     }
                 });
             }
             
             // Add current partial with special styling (show typed portion)
             if (displayedPartialText) {
-                // Add line break before partial if we have finals
+                // Add space before partial if we have finals
                 if (fullTranscriptFinals.length > 0) {
-                    html += '<br><br>';
+                    html += ' ';
                 }
                 html += `<span class="partial-text">${escapeHtml(displayedPartialText)}</span>`;
             }
