@@ -436,7 +436,7 @@
             border: 1px solid var(--border);
             border-radius: var(--radius);
             margin-bottom: 24px;
-            max-height: 200px;
+            max-height: 280px;
             display: flex;
             flex-direction: column;
         }
@@ -899,14 +899,33 @@
             // Build the full transcript text
             let html = '';
             
-            // Add all finals as regular text
+            // Add all finals as separate sentences with periods and line breaks
             if (fullTranscriptFinals.length > 0) {
-                const finalText = fullTranscriptFinals.join(' ');
-                html += `<span class="final-text">${escapeHtml(finalText)}</span>`;
+                fullTranscriptFinals.forEach((text, index) => {
+                    // Clean up text and ensure it ends with proper punctuation
+                    let sentence = text.trim();
+                    // Capitalize first letter
+                    if (sentence.length > 0) {
+                        sentence = sentence.charAt(0).toUpperCase() + sentence.slice(1);
+                    }
+                    // Add period if no ending punctuation
+                    if (sentence && !sentence.match(/[.!?]$/)) {
+                        sentence += '.';
+                    }
+                    html += `<span class="final-text">${escapeHtml(sentence)}</span>`;
+                    // Add line break after each sentence except the last (if there's a partial coming)
+                    if (index < fullTranscriptFinals.length - 1) {
+                        html += '<br><br>';
+                    }
+                });
             }
             
             // Add current partial with special styling (show typed portion)
             if (displayedPartialText) {
+                // Add line break before partial if we have finals
+                if (fullTranscriptFinals.length > 0) {
+                    html += '<br><br>';
+                }
                 html += `<span class="partial-text">${escapeHtml(displayedPartialText)}</span>`;
             }
             
