@@ -25,7 +25,7 @@ const chunkSize = 1600
 const chunkIntervalMs = 100
 
 func main() {
-	audioFile := flag.String("audio", "../../testdata/sample-8khz.wav", "Path to WAV file (8kHz 16-bit mono)")
+	audioFile := flag.String("audio", "../testdata/sample-8khz.wav", "Path to WAV file (8kHz 16-bit mono)")
 	serverAddr := flag.String("server", "localhost:50051", "gRPC server address")
 	interactionId := flag.String("interaction", "test-audio-"+time.Now().Format("150405"), "Interaction ID")
 	tenantId := flag.String("tenant", "tenant-demo", "Tenant ID")

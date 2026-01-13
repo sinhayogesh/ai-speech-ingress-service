@@ -51,6 +51,9 @@ type Handler struct {
 	tenantId          string
 	lastAudioOffsetMs int64
 
+	// Stream context for cancellation propagation
+	ctx context.Context
+
 	// Segment lifecycle state machine
 	lifecycle *segment.Lifecycle
 
@@ -126,6 +129,8 @@ func (h *Handler) SetSegmentTransitionCallback(cb SegmentTransitionCallback) {
 // Start begins the STT session with this handler as the callback receiver.
 func (h *Handler) Start(ctx context.Context) error {
 	h.logger.Info().Msg("Starting audio handler")
+	// Store context for use in callbacks (publishing events)
+	h.ctx = ctx
 	return h.adapter.Start(ctx, h)
 }
 
@@ -404,7 +409,11 @@ func (h *Handler) GetSegmentMetrics() SegmentMetrics {
 }
 
 func (h *Handler) publishPartial(ev models.TranscriptPartial) {
-	ctx := context.Background()
+	// Use stored context for cancellation propagation, fall back to background if not set
+	ctx := h.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if err := h.publisher.PublishPartial(ctx, h.interactionId, ev); err != nil {
 		h.logger.Error().
 			Err(err).
@@ -414,7 +423,11 @@ func (h *Handler) publishPartial(ev models.TranscriptPartial) {
 }
 
 func (h *Handler) publishFinal(ev models.TranscriptFinal) {
-	ctx := context.Background()
+	// Use stored context for cancellation propagation, fall back to background if not set
+	ctx := h.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if err := h.publisher.PublishFinal(ctx, h.interactionId, ev); err != nil {
 		h.logger.Error().
 			Err(err).

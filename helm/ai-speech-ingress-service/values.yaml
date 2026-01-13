@@ -37,8 +37,17 @@ kafka:
   topicFinal: "interaction.transcript.final"
   principal: "svc-speech-ingress"
 
-# STT provider: google or mock
-sttProvider: mock
+# Service identity
+service:
+  principal: "svc-speech-ingress"
+
+# STT configuration
+stt:
+  provider: mock       # google or mock
+  languageCode: "en-US"
+  sampleRateHz: 8000
+  interimResults: true
+  audioEncoding: "LINEAR16"
 
 # Segment safety limits for backpressure
 segmentLimits:

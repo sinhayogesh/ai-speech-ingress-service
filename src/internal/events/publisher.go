@@ -37,7 +37,16 @@ type Config struct {
 func New(cfg *Config) *Publisher {
 	m := metrics.DefaultMetrics
 
-	if cfg == nil || !cfg.Enabled || len(cfg.Brokers) == 0 {
+	// Handle nil config case
+	if cfg == nil {
+		log.Info().Msg("Kafka disabled (nil config), using log-only mode")
+		return &Publisher{
+			enabled: false,
+			metrics: m,
+		}
+	}
+
+	if !cfg.Enabled || len(cfg.Brokers) == 0 {
 		log.Info().Msg("Kafka disabled, using log-only mode")
 		return &Publisher{
 			principal:    cfg.Principal,

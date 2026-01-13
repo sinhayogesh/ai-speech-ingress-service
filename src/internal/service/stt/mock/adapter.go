@@ -103,30 +103,28 @@ func (a *Adapter) SendAudio(ctx context.Context, audio []byte) error {
 	if a.partialIndex < len(a.utterance.Partials) {
 		partial := a.utterance.Partials[a.partialIndex]
 		a.partialIndex++
+		cb := a.cb
+		closed := a.closed
 
-		// Simulate processing delay
-		go func(text string) {
+		// Simulate processing delay - invoke callback outside of lock to prevent deadlock
+		go func(text string, cb stt.Callback, closed bool) {
 			time.Sleep(50 * time.Millisecond)
-			a.mu.Lock()
-			if !a.closed && a.cb != nil {
-				a.cb.OnPartial(text)
+			if !closed && cb != nil {
+				cb.OnPartial(text)
 			}
-			a.mu.Unlock()
-		}(partial)
+		}(partial, cb, closed)
 	} else if !a.finalSent {
 		// All partials sent - simulate utterance completion
 		// This mimics silence detection triggering end of utterance
 		a.finalSent = true
 		a.endOfUtteranceSent = true
+		cb := a.cb
+		closed := a.closed
+		utt := a.utterance
 
+		// Invoke callbacks outside of lock to prevent deadlock
 		go func() {
 			time.Sleep(100 * time.Millisecond)
-			a.mu.Lock()
-			cb := a.cb
-			closed := a.closed
-			utt := a.utterance
-			a.mu.Unlock()
-
 			if !closed && cb != nil {
 				// Send final transcript
 				cb.OnFinal(utt.Final, utt.Confidence)
@@ -143,20 +141,29 @@ func (a *Adapter) SendAudio(ctx context.Context, audio []byte) error {
 // If final wasn't sent via SendAudio (stream ended early), send it now.
 func (a *Adapter) Close() error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 
 	if a.closed {
+		a.mu.Unlock()
 		return nil
 	}
 	a.closed = true
 
+	// Capture callback and utterance before releasing lock
+	cb := a.cb
+	utt := a.utterance
+	shouldSendFinal := !a.finalSent && cb != nil
+	if shouldSendFinal {
+		a.finalSent = true
+	}
+	a.mu.Unlock()
+
 	// If final wasn't sent yet (stream ended before natural utterance end),
 	// send final now based on whatever partials we received
-	if !a.finalSent && a.cb != nil {
-		a.finalSent = true
+	// Invoke callback outside of lock to prevent deadlock
+	if shouldSendFinal {
 		go func() {
 			time.Sleep(100 * time.Millisecond)
-			a.cb.OnFinal(a.utterance.Final, a.utterance.Confidence)
+			cb.OnFinal(utt.Final, utt.Confidence)
 		}()
 	}
 

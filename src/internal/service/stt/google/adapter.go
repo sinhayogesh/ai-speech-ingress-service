@@ -35,6 +35,7 @@ type Adapter struct {
 	stream speechpb.Speech_StreamingRecognizeClient
 	cb     stt.Callback
 	config Config
+	ctx    context.Context // Store context for Listen goroutine cancellation
 }
 
 // New creates a new Google STT adapter with default configuration.
@@ -62,6 +63,7 @@ func (a *Adapter) Start(ctx context.Context, cb stt.Callback) error {
 	}
 	a.stream = stream
 	a.cb = cb
+	a.ctx = ctx // Store for graceful shutdown in Listen
 
 	// Send streaming config as the first message
 	// SingleUtterance mode tells Google to detect when the speaker stops talking
@@ -113,25 +115,42 @@ func (a *Adapter) SendAudio(ctx context.Context, audio []byte) error {
 	})
 }
 
-// Close ends the streaming session.
+// Close ends the streaming session and releases resources.
 func (a *Adapter) Close() error {
+	var streamErr error
 	if a.stream != nil {
-		return a.stream.CloseSend()
+		streamErr = a.stream.CloseSend()
 	}
-	return nil
+	// Close the underlying client to release resources
+	if a.client != nil {
+		if err := a.client.Close(); err != nil {
+			return err
+		}
+	}
+	return streamErr
 }
 
 // Listen receives transcript responses from Google and invokes callbacks.
 // Should be called in a separate goroutine after Start().
 // Detects END_OF_SINGLE_UTTERANCE events to signal utterance boundaries.
+// Respects context cancellation for graceful shutdown.
 func (a *Adapter) Listen() {
 	for {
+		// Check for context cancellation before blocking on Recv
+		if a.ctx != nil && a.ctx.Err() != nil {
+			return
+		}
+
 		resp, err := a.stream.Recv()
 		if err == io.EOF {
 			// Stream closed normally
 			return
 		}
 		if err != nil {
+			// Don't report error if context was cancelled (graceful shutdown)
+			if a.ctx != nil && a.ctx.Err() != nil {
+				return
+			}
 			a.cb.OnError(err)
 			return
 		}
