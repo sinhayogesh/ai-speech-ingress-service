@@ -137,6 +137,29 @@ func (a *Adapter) SendAudio(ctx context.Context, audio []byte) error {
 	return nil
 }
 
+// Restart resets the mock adapter for a new utterance.
+// This allows the mock to simulate multiple utterances in a single stream.
+func (a *Adapter) Restart(ctx context.Context) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	// Pick the next utterance from the cycle
+	counterMu.Lock()
+	idx := utteranceCounter % len(DefaultUtterances)
+	utteranceCounter++
+	counterMu.Unlock()
+
+	// Reset state for new utterance
+	a.utterance = DefaultUtterances[idx]
+	a.partialIndex = 0
+	a.finalSent = false
+	a.endOfUtteranceSent = false
+	a.audioReceived = 0
+	// Keep closed = false and cb unchanged
+
+	return nil
+}
+
 // Close ends the mock session.
 // If final wasn't sent via SendAudio (stream ended early), send it now.
 func (a *Adapter) Close() error {
