@@ -429,6 +429,79 @@
         .filter-input::placeholder {
             color: var(--text-muted);
         }
+
+        /* Full transcript panel */
+        .full-transcript-panel {
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin-bottom: 24px;
+            max-height: 200px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .full-transcript-content {
+            padding: 20px;
+            overflow-y: auto;
+            flex: 1;
+        }
+
+        .full-transcript-content::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .full-transcript-content::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .full-transcript-content::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 3px;
+        }
+
+        .full-transcript-text {
+            font-size: 1.15rem;
+            line-height: 1.8;
+            color: var(--text-primary);
+        }
+
+        .full-transcript-text .final-text {
+            color: var(--text-primary);
+        }
+
+        .full-transcript-text .partial-text {
+            color: var(--accent-secondary);
+            font-style: italic;
+            opacity: 0.9;
+            border-bottom: 2px solid var(--accent-secondary);
+            animation: partialPulse 1s ease-in-out infinite;
+        }
+
+        @keyframes partialPulse {
+            0%, 100% { opacity: 0.9; }
+            50% { opacity: 0.6; }
+        }
+
+        .full-transcript-empty {
+            color: var(--text-muted);
+            font-style: italic;
+        }
+
+        .transcript-cursor {
+            display: inline-block;
+            width: 2px;
+            height: 1.2em;
+            background: var(--accent-primary);
+            margin-left: 4px;
+            animation: cursorBlink 1s step-end infinite;
+            vertical-align: text-bottom;
+        }
+
+        @keyframes cursorBlink {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0; }
+        }
     </style>
 </head>
 <body>
@@ -445,6 +518,19 @@
                 <span id="status-text">Connecting...</span>
             </div>
         </header>
+
+        <!-- Full Transcript Panel -->
+        <div class="full-transcript-panel">
+            <div class="panel-header">
+                <span>📄</span> Full Transcript
+                <button class="clear-btn" onclick="clearTranscripts()">Clear</button>
+            </div>
+            <div class="full-transcript-content">
+                <div class="full-transcript-text" id="full-transcript">
+                    <span class="full-transcript-empty">Start streaming audio to see the complete transcription here...</span>
+                </div>
+            </div>
+        </div>
 
         <div class="stats">
             <div class="stat-card partials">
@@ -507,6 +593,11 @@
         let partialCount = 0;
         let finalCount = 0;
         let currentFilter = '';
+        
+        // Full transcript tracking
+        let fullTranscriptFinals = [];  // Array of final transcript texts
+        let currentPartialText = '';     // Current partial being spoken
+        let currentPartialSegment = '';  // Track which segment the partial belongs to
 
         function connect() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -546,14 +637,24 @@
             if (emptyState) emptyState.style.display = 'none';
             if (segmentEmpty) segmentEmpty.style.display = 'none';
 
-            // Update counts
+            // Update counts and full transcript
             if (data.eventType === 'interaction.transcript.partial') {
                 partialCount++;
                 document.getElementById('partial-count').textContent = partialCount;
+                // Update current partial for display
+                currentPartialText = data.text;
+                currentPartialSegment = data.segmentId;
             } else if (data.eventType === 'interaction.transcript.final') {
                 finalCount++;
                 document.getElementById('final-count').textContent = finalCount;
+                // Add to full transcript and clear partial
+                fullTranscriptFinals.push(data.text.trim());
+                currentPartialText = '';
+                currentPartialSegment = '';
             }
+            
+            // Update the full transcript display
+            updateFullTranscript();
 
             // Track segments
             if (!segments.has(data.segmentId)) {
@@ -669,9 +770,18 @@
             partialCount = 0;
             finalCount = 0;
             
+            // Clear full transcript data
+            fullTranscriptFinals = [];
+            currentPartialText = '';
+            currentPartialSegment = '';
+            
             document.getElementById('partial-count').textContent = '0';
             document.getElementById('final-count').textContent = '0';
             document.getElementById('segment-count').textContent = '0';
+            
+            // Reset full transcript display
+            document.getElementById('full-transcript').innerHTML = 
+                '<span class="full-transcript-empty">Start streaming audio to see the complete transcription here...</span>';
             
             // Recreate empty states since innerHTML = '' destroys them
             const list = document.getElementById('transcript-list');
@@ -696,6 +806,38 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        function updateFullTranscript() {
+            const container = document.getElementById('full-transcript');
+            
+            if (fullTranscriptFinals.length === 0 && !currentPartialText) {
+                container.innerHTML = '<span class="full-transcript-empty">Start streaming audio to see the complete transcription here...</span>';
+                return;
+            }
+            
+            // Build the full transcript text
+            let html = '';
+            
+            // Add all finals as regular text
+            if (fullTranscriptFinals.length > 0) {
+                const finalText = fullTranscriptFinals.join(' ');
+                html += `<span class="final-text">${escapeHtml(finalText)}</span>`;
+            }
+            
+            // Add current partial with special styling
+            if (currentPartialText) {
+                html += `<span class="partial-text">${escapeHtml(currentPartialText)}</span>`;
+            }
+            
+            // Add blinking cursor
+            html += '<span class="transcript-cursor"></span>';
+            
+            container.innerHTML = html;
+            
+            // Auto-scroll to bottom
+            const contentDiv = container.parentElement;
+            contentDiv.scrollTop = contentDiv.scrollHeight;
         }
 
         // Start connection
