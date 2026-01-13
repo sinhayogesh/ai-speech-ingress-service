@@ -34,3 +34,4 @@ Thumbs.db
 docs/*.json
 *.json
 !package*.json
+tools/transcript-viewer/transcript-viewer

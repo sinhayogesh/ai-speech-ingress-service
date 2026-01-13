@@ -34,6 +34,9 @@ test-client: ## Run the test gRPC client
 audio-test: ## Stream real audio file to service (requires running server)
 	cd src && go run ./cmd/audioclient -audio=../testdata/sample-8khz.wav
 
+transcript-viewer: ## Run the real-time transcript viewer UI
+	cd tools/transcript-viewer && go run main.go
+
 # ---------------------------------------------------------
 # Dependencies
 # ---------------------------------------------------------
