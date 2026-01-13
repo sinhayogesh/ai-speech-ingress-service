@@ -121,12 +121,12 @@ func wsHandler(hub *Hub) http.HandlerFunc {
 	}
 }
 
-func consumeKafka(ctx context.Context, hub *Hub, brokers, topic string) {
+func consumeKafkaPartition(ctx context.Context, hub *Hub, brokers, topic string, partition int) {
 	// Use partition reader without consumer group (works better through port-forward)
 	reader := kafka.NewReader(kafka.ReaderConfig{
 		Brokers:   strings.Split(brokers, ","),
 		Topic:     topic,
-		Partition: 0, // Read from partition 0 only (simplest for demo)
+		Partition: partition,
 		MinBytes:  1,
 		MaxBytes:  10e6,
 	})
@@ -135,7 +135,7 @@ func consumeKafka(ctx context.Context, hub *Hub, brokers, topic string) {
 	// Start from the latest offset (only show new messages)
 	reader.SetOffsetAt(ctx, time.Now().Add(-1*time.Hour)) // Last hour of messages
 
-	log.Printf("Consuming from Kafka topic: %s partition 0 (last hour)", topic)
+	log.Printf("Consuming from Kafka topic: %s partition %d", topic, partition)
 
 	for {
 		select {
@@ -147,7 +147,7 @@ func consumeKafka(ctx context.Context, hub *Hub, brokers, topic string) {
 				if ctx.Err() != nil {
 					return
 				}
-				log.Printf("Kafka read error on %s: %v", topic, err)
+				log.Printf("Kafka read error on %s partition %d: %v", topic, partition, err)
 				time.Sleep(time.Second)
 				continue
 			}
@@ -158,9 +158,16 @@ func consumeKafka(ctx context.Context, hub *Hub, brokers, topic string) {
 				continue
 			}
 
-			log.Printf("📨 Received %s: %s (segment: %s)", event.EventType, truncate(event.Text, 40), event.SegmentID)
+			log.Printf("📨 [P%d] %s: %s (segment: %s)", partition, event.EventType, truncate(event.Text, 40), event.SegmentID)
 			hub.broadcast <- event
 		}
+	}
+}
+
+// consumeKafka starts consumers for all partitions of a topic
+func consumeKafka(ctx context.Context, hub *Hub, brokers, topic string, numPartitions int) {
+	for p := 0; p < numPartitions; p++ {
+		go consumeKafkaPartition(ctx, hub, brokers, topic, p)
 	}
 }
 
@@ -169,6 +176,7 @@ func main() {
 	brokers := flag.String("brokers", "localhost:9092", "Kafka brokers (comma-separated)")
 	topicPartial := flag.String("topic-partial", "interaction.transcript.partial", "Partial transcript topic")
 	topicFinal := flag.String("topic-final", "interaction.transcript.final", "Final transcript topic")
+	partitions := flag.Int("partitions", 3, "Number of partitions per topic")
 	flag.Parse()
 
 	hub := newHub()
@@ -177,9 +185,9 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Start Kafka consumers
-	go consumeKafka(ctx, hub, *brokers, *topicPartial)
-	go consumeKafka(ctx, hub, *brokers, *topicFinal)
+	// Start Kafka consumers for all partitions
+	consumeKafka(ctx, hub, *brokers, *topicPartial, *partitions)
+	consumeKafka(ctx, hub, *brokers, *topicFinal, *partitions)
 
 	// Serve static files
 	staticFS, _ := fs.Sub(staticFiles, "static")
@@ -190,7 +198,7 @@ func main() {
 
 	log.Printf("🎙️  Transcript Viewer starting on http://localhost:%s", *port)
 	log.Printf("   Kafka brokers: %s", *brokers)
-	log.Printf("   Topics: %s, %s", *topicPartial, *topicFinal)
+	log.Printf("   Topics: %s, %s (%d partitions each)", *topicPartial, *topicFinal, *partitions)
 
 	if err := http.ListenAndServe(":"+*port, nil); err != nil {
 		log.Fatalf("Server error: %v", err)
