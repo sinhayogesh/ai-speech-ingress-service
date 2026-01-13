@@ -14,19 +14,21 @@ import (
 
 // Config holds Google STT configuration.
 type Config struct {
-	LanguageCode   string // BCP-47 language code (e.g., "en-US")
-	SampleRateHz   int    // Audio sample rate in Hertz
-	InterimResults bool   // Enable partial/interim transcripts
-	AudioEncoding  string // Audio encoding (LINEAR16, MULAW, FLAC, etc.)
+	LanguageCode    string // BCP-47 language code (e.g., "en-US")
+	SampleRateHz    int    // Audio sample rate in Hertz
+	InterimResults  bool   // Enable partial/interim transcripts
+	AudioEncoding   string // Audio encoding (LINEAR16, MULAW, FLAC, etc.)
+	SingleUtterance bool   // Enable single utterance mode (stops after each utterance)
 }
 
 // DefaultConfig returns sensible defaults for Google STT.
 func DefaultConfig() Config {
 	return Config{
-		LanguageCode:   "en-US",
-		SampleRateHz:   8000,
-		InterimResults: true,
-		AudioEncoding:  "LINEAR16",
+		LanguageCode:    "en-US",
+		SampleRateHz:    8000,
+		InterimResults:  true,
+		AudioEncoding:   "LINEAR16",
+		SingleUtterance: true, // Enable by default for utterance boundary detection
 	}
 }
 
@@ -57,7 +59,6 @@ func NewWithConfig(ctx context.Context, cfg Config) (*Adapter, error) {
 }
 
 // Start begins a streaming recognition session and sends the initial config.
-// Configures single utterance mode to detect end-of-utterance boundaries.
 func (a *Adapter) Start(ctx context.Context, cb stt.Callback) error {
 	stream, err := a.client.StreamingRecognize(ctx)
 	if err != nil {
@@ -68,7 +69,7 @@ func (a *Adapter) Start(ctx context.Context, cb stt.Callback) error {
 	a.ctx = ctx // Store for graceful shutdown in Listen
 
 	// Send streaming config as the first message
-	// SingleUtterance mode tells Google to detect when the speaker stops talking
+	// SingleUtterance mode (if enabled) tells Google to detect when the speaker stops talking
 	return stream.Send(&speechpb.StreamingRecognizeRequest{
 		StreamingRequest: &speechpb.StreamingRecognizeRequest_StreamingConfig{
 			StreamingConfig: &speechpb.StreamingRecognitionConfig{
@@ -78,7 +79,7 @@ func (a *Adapter) Start(ctx context.Context, cb stt.Callback) error {
 					LanguageCode:    a.config.LanguageCode,
 				},
 				InterimResults:  a.config.InterimResults,
-				SingleUtterance: true, // Enable utterance boundary detection
+				SingleUtterance: a.config.SingleUtterance,
 			},
 		},
 	})
@@ -157,7 +158,7 @@ func (a *Adapter) Restart(ctx context.Context) error {
 					LanguageCode:    a.config.LanguageCode,
 				},
 				InterimResults:  a.config.InterimResults,
-				SingleUtterance: true,
+				SingleUtterance: a.config.SingleUtterance,
 			},
 		},
 	})

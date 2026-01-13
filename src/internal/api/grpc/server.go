@@ -111,6 +111,12 @@ func (s *Server) StreamAudio(stream pb.AudioStreamService_StreamAudioServer) err
 	// Use configured limits for backpressure safety
 	handler := audio.NewHandlerWithLimits(adapter, s.publisher, s.segments, interactionId, tenantId, segmentId, s.segmentLimits)
 
+	// Enable continuous mode when SingleUtterance is disabled
+	// In this mode, each final creates a new segment automatically
+	if !s.sttConfig.SingleUtterance {
+		handler.SetContinuousMode(true)
+	}
+
 	// Start the STT streaming session
 	if err := handler.Start(ctx); err != nil {
 		log.Error().Err(err).Msg("Failed to start STT session")
@@ -204,10 +210,11 @@ func (s *Server) createSTTAdapter(ctx context.Context) (stt.Adapter, error) {
 	switch s.sttConfig.Provider {
 	case "google":
 		cfg := google.Config{
-			LanguageCode:   s.sttConfig.LanguageCode,
-			SampleRateHz:   s.sttConfig.SampleRateHz,
-			InterimResults: s.sttConfig.InterimResults,
-			AudioEncoding:  s.sttConfig.AudioEncoding,
+			LanguageCode:    s.sttConfig.LanguageCode,
+			SampleRateHz:    s.sttConfig.SampleRateHz,
+			InterimResults:  s.sttConfig.InterimResults,
+			AudioEncoding:   s.sttConfig.AudioEncoding,
+			SingleUtterance: s.sttConfig.SingleUtterance,
 		}
 		return google.NewWithConfig(ctx, cfg)
 	case "mock":

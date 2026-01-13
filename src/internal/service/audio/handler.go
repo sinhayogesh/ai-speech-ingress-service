@@ -75,6 +75,10 @@ type Handler struct {
 	// before restarting, otherwise we'll have two Listen goroutines racing.
 	pendingRestart bool
 
+	// Continuous mode creates new segments after each final (no OnEndOfUtterance needed)
+	// This is used when SingleUtterance=false - Google sends multiple finals per stream
+	continuousMode bool
+
 	// Observability
 	metrics *metrics.Metrics
 	logger  zerolog.Logger
@@ -129,6 +133,15 @@ func (h *Handler) SetSegmentTransitionCallback(cb SegmentTransitionCallback) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.onSegmentTransition = cb
+}
+
+// SetContinuousMode enables continuous mode where each final creates a new segment.
+// This is used when SingleUtterance=false - Google sends multiple finals per stream
+// without END_OF_SINGLE_UTTERANCE events.
+func (h *Handler) SetContinuousMode(enabled bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.continuousMode = enabled
 }
 
 // Start begins the STT session with this handler as the callback receiver.
@@ -283,14 +296,74 @@ func (h *Handler) OnFinal(text string, confidence float64) {
 	h.publishFinal(ev)
 
 	// Check if we need to restart for the next utterance
-	// This happens after OnEndOfUtterance was received
+	// This happens after OnEndOfUtterance was received (SingleUtterance mode)
 	h.mu.Lock()
 	needsRestart := h.pendingRestart
 	h.pendingRestart = false
+	isContinuousMode := h.continuousMode
 	h.mu.Unlock()
 
 	if needsRestart {
+		// SingleUtterance mode: restart adapter for next utterance
 		h.handleUtteranceTransition()
+	} else if isContinuousMode {
+		// Continuous mode: create new segment but don't restart adapter
+		// (Google keeps streaming in the same session)
+		h.handleContinuousModeTransition()
+	}
+}
+
+// handleContinuousModeTransition creates a new segment after a final in continuous mode.
+// Unlike handleUtteranceTransition, this doesn't restart the adapter since Google
+// continues transcribing in the same session.
+func (h *Handler) handleContinuousModeTransition() {
+	oldSegmentId := h.lifecycle.SegmentId()
+
+	// Close current segment
+	h.lifecycle.Close()
+
+	// Generate new segment ID and reset metrics
+	h.mu.Lock()
+	h.utteranceCount++
+	oldAudioBytes := h.audioBytes
+	oldPartialCount := h.partialCount
+	oldDuration := time.Since(h.segmentStartTime)
+
+	// Reset segment metrics for new segment
+	h.audioBytes = 0
+	h.partialCount = 0
+	h.segmentStartTime = time.Now()
+
+	var newSegmentId string
+	if h.segmentGen != nil {
+		newSegmentId = h.segmentGen.Next(h.interactionId)
+	} else {
+		newSegmentId = oldSegmentId + "-next"
+	}
+	cb := h.onSegmentTransition
+	h.mu.Unlock()
+
+	// Reset lifecycle for new segment
+	h.lifecycle.Reset(newSegmentId)
+
+	// Record metrics
+	h.metrics.RecordUtterance()
+	h.metrics.RecordSegmentCreated()
+
+	// Update logger context
+	h.logger = h.logger.With().Str("segmentId", newSegmentId).Logger()
+
+	h.logger.Debug().
+		Str("oldSegmentId", oldSegmentId).
+		Int("utteranceCount", h.utteranceCount).
+		Int64("audioBytes", oldAudioBytes).
+		Int("partialCount", oldPartialCount).
+		Dur("duration", oldDuration).
+		Msg("Continuous mode - new segment created after final")
+
+	// Notify server of segment transition if callback is set
+	if cb != nil {
+		cb(newSegmentId)
 	}
 }
 

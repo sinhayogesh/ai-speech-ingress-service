@@ -51,6 +51,12 @@ type STTConfig struct {
 	// Supported: LINEAR16, MULAW, FLAC, etc.
 	// Default: LINEAR16
 	AudioEncoding string
+
+	// SingleUtterance enables single utterance mode.
+	// When true, Google stops after each detected utterance boundary.
+	// When false, Google continues transcribing without stopping.
+	// Default: false (continuous mode for better multi-sentence handling)
+	SingleUtterance bool
 }
 
 // SegmentLimitsConfig holds safety limits for segment processing.
@@ -124,11 +130,12 @@ func Load() *Config {
 			GRPCPort:  envOrDefault("GRPC_PORT", DefaultGRPCPort),
 		},
 		STT: STTConfig{
-			Provider:       envOrDefault("STT_PROVIDER", "mock"), // default to mock for local dev
-			LanguageCode:   envOrDefault("STT_LANGUAGE_CODE", DefaultLanguageCode),
-			SampleRateHz:   envOrDefaultInt("STT_SAMPLE_RATE_HZ", DefaultSampleRateHz),
-			InterimResults: envOrDefaultBool("STT_INTERIM_RESULTS", DefaultInterimResults),
-			AudioEncoding:  envOrDefault("STT_AUDIO_ENCODING", DefaultAudioEncoding),
+			Provider:        envOrDefault("STT_PROVIDER", "mock"), // default to mock for local dev
+			LanguageCode:    envOrDefault("STT_LANGUAGE_CODE", DefaultLanguageCode),
+			SampleRateHz:    envOrDefaultInt("STT_SAMPLE_RATE_HZ", DefaultSampleRateHz),
+			InterimResults:  envOrDefaultBool("STT_INTERIM_RESULTS", DefaultInterimResults),
+			AudioEncoding:   envOrDefault("STT_AUDIO_ENCODING", DefaultAudioEncoding),
+			SingleUtterance: envOrDefaultBool("STT_SINGLE_UTTERANCE", false), // default to continuous mode
 		},
 		Kafka: KafkaConfig{
 			Enabled:      envOrDefault("KAFKA_ENABLED", "false") == "true",

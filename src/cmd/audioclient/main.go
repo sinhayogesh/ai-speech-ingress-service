@@ -128,8 +128,13 @@ func main() {
 	elapsed := time.Since(startTime)
 	log.Printf("Finished streaming: %d chunks, %d bytes in %v", chunkNum, totalBytes, elapsed)
 
+	// Wait for Google STT to finish processing buffered audio
+	// Google needs time to transcribe remaining utterances after audio ends
+	log.Println("Waiting for STT to finish processing...")
+	time.Sleep(10 * time.Second)
+
 	// Close stream and wait for response
-	log.Println("Closing stream, waiting for final transcripts...")
+	log.Println("Closing stream...")
 
 	ack, err := stream.CloseAndRecv()
 	if err != nil {
