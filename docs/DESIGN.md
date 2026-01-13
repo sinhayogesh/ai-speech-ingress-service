@@ -84,13 +84,21 @@ The Google adapter accepts configuration via `STT_*` environment variables:
 
 ```go
 cfg := google.Config{
-    LanguageCode:   "en-US",       // STT_LANGUAGE_CODE
-    SampleRateHz:   8000,          // STT_SAMPLE_RATE_HZ
-    InterimResults: true,          // STT_INTERIM_RESULTS
-    AudioEncoding:  "LINEAR16",    // STT_AUDIO_ENCODING
+    LanguageCode:    "en-US",       // STT_LANGUAGE_CODE
+    SampleRateHz:    8000,          // STT_SAMPLE_RATE_HZ
+    InterimResults:  true,          // STT_INTERIM_RESULTS
+    AudioEncoding:   "LINEAR16",    // STT_AUDIO_ENCODING
+    SingleUtterance: false,         // STT_SINGLE_UTTERANCE (default: continuous mode)
 }
 adapter, err := google.NewWithConfig(ctx, cfg)
 ```
+
+**Transcription Modes:**
+
+| Mode | `SingleUtterance` | Behavior |
+|------|-------------------|----------|
+| **Continuous** (default) | `false` | Multiple finals per session, each creates new segment |
+| **Single Utterance** | `true` | Session restarts after each detected utterance |
 
 #### 4. Segment Generator & Lifecycle (`internal/service/segment/`)
 
@@ -227,14 +235,71 @@ A single audio stream may contain multiple utterances (speaker pauses between se
 2. Finalize the current segment
 3. Start a new segment for subsequent speech
 
-### Solution
+### Solution: Two Modes
 
-#### Google STT
+The service supports two transcription modes, configurable via `STT_SINGLE_UTTERANCE`:
 
-Uses `SingleUtterance: true` in streaming config:
-- Google detects end-of-speech via Voice Activity Detection (VAD)
-- Returns `END_OF_SINGLE_UTTERANCE` event
-- We call `OnEndOfUtterance()` callback
+#### Continuous Mode (Default, `STT_SINGLE_UTTERANCE=false`)
+
+In continuous mode, Google transcribes the entire audio stream in a single session:
+
+```
+Audio: "Sentence 1" "Sentence 2" "Sentence 3" ... "Sentence 10"
+                │           │           │               │
+                ▼           ▼           ▼               ▼
+            seg-1       seg-2       seg-3    ...    seg-10
+         (isFinal)   (isFinal)   (isFinal)       (isFinal)
+```
+
+**How it works:**
+1. Google sends `isFinal=true` for each detected sentence
+2. Handler creates new segment after each final (no session restart)
+3. All audio is processed in one continuous session
+4. Best for: recordings, multi-sentence audio
+
+**Handler Behavior (Continuous Mode):**
+```go
+// When final is received in continuous mode:
+1. Emit final transcript for current segment
+2. Close current segment (FINAL_EMITTED → CLOSED)
+3. Generate new segmentId
+4. Reset segment metrics
+5. Continue receiving from same STT session
+```
+
+#### Single Utterance Mode (`STT_SINGLE_UTTERANCE=true`)
+
+In single utterance mode, Google stops after each detected speech pause:
+
+```
+Audio: "Hello" [pause] "How are you" [pause] ...
+            │               │
+            ▼               ▼
+    END_OF_SINGLE_UTTERANCE + final
+            │               │
+       seg-1 complete   seg-2 complete
+       [restart STT]    [restart STT]
+```
+
+**How it works:**
+1. Google detects end-of-speech via Voice Activity Detection (VAD)
+2. Returns `END_OF_SINGLE_UTTERANCE` event followed by final
+3. Handler restarts STT session for next utterance
+4. Best for: conversational audio with natural pauses
+
+**Caveat:** When restarting, any audio sent to the old session but not yet transcribed may be lost. This can cause missed utterances in rapidly-spoken audio.
+
+**Handler Behavior (Single Utterance Mode):**
+```go
+// When END_OF_SINGLE_UTTERANCE is received:
+1. Set pendingRestart flag
+// When final is received after END_OF_SINGLE_UTTERANCE:
+2. Emit final transcript
+3. Close current segment
+4. Generate new segmentId
+5. Restart STT adapter (new session)
+6. Start new Listen goroutine
+```
 
 #### Mock STT
 
@@ -242,13 +307,14 @@ Simulates utterance completion:
 - After all partials sent (based on frame count)
 - Sends final + `OnEndOfUtterance()`
 
-### Handler Behavior
+### Mode Selection
 
-When `OnEndOfUtterance()` is called:
-1. Log the segment transition
-2. Generate new segmentId via segment generator
-3. Update handler's current segmentId
-4. Continue processing audio in new segment
+| Scenario | Recommended Mode | Env Var |
+|----------|------------------|---------|
+| Multi-sentence recordings | Continuous | `STT_SINGLE_UTTERANCE=false` |
+| Call center transcription | Continuous | `STT_SINGLE_UTTERANCE=false` |
+| Voice commands | Single Utterance | `STT_SINGLE_UTTERANCE=true` |
+| Conversational with pauses | Single Utterance | `STT_SINGLE_UTTERANCE=true` |
 
 ---
 
@@ -393,8 +459,13 @@ All behavior is adjustable via environment variables with safe defaults. No dyna
 | Sample Rate | `8000` | `STT_SAMPLE_RATE_HZ` | Audio sample rate (Hz) |
 | Interim Results | `true` | `STT_INTERIM_RESULTS` | Enable partial transcripts |
 | Audio Encoding | `LINEAR16` | `STT_AUDIO_ENCODING` | Audio format |
+| Single Utterance | `false` | `STT_SINGLE_UTTERANCE` | Utterance mode (see below) |
 
 **Supported encodings:** `LINEAR16`, `MULAW`, `FLAC`, `AMR`, `AMR_WB`, `OGG_OPUS`, `SPEEX_WITH_HEADER_BYTE`, `WEBM_OPUS`
+
+**Single Utterance Mode:**
+- `false` (default): **Continuous mode** - Google sends multiple finals per session, best for multi-sentence audio
+- `true`: **Single utterance mode** - Session restarts after each utterance, best for conversational with pauses
 
 #### C) Segment Guardrails
 
@@ -416,11 +487,12 @@ cfg.Service.Principal  // "svc-speech-ingress"
 cfg.Service.GRPCPort   // "50051"
 
 // STT parameters
-cfg.STT.Provider       // "mock"
-cfg.STT.LanguageCode   // "en-US"
-cfg.STT.SampleRateHz   // 8000
-cfg.STT.InterimResults // true
-cfg.STT.AudioEncoding  // "LINEAR16"
+cfg.STT.Provider        // "mock"
+cfg.STT.LanguageCode    // "en-US"
+cfg.STT.SampleRateHz    // 8000
+cfg.STT.InterimResults  // true
+cfg.STT.AudioEncoding   // "LINEAR16"
+cfg.STT.SingleUtterance // false (continuous mode by default)
 
 // Segment limits
 cfg.SegmentLimits.MaxAudioBytes // 5MB
@@ -434,7 +506,7 @@ All configuration is logged at startup for visibility:
 
 ```json
 {"level":"info","servicePrincipal":"svc-speech-ingress","grpcPort":"50051","logLevel":"info","message":"Starting Speech Ingress Service"}
-{"level":"info","provider":"mock","languageCode":"en-US","sampleRateHz":8000,"interimResults":true,"audioEncoding":"LINEAR16","message":"STT configuration"}
+{"level":"info","provider":"google","languageCode":"en-US","sampleRateHz":8000,"interimResults":true,"audioEncoding":"LINEAR16","singleUtterance":false,"message":"STT configuration"}
 {"level":"info","maxAudioBytes":5242880,"maxDuration":"5m0s","maxPartials":500,"message":"Segment limits"}
 ```
 

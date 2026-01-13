@@ -71,7 +71,7 @@ type Adapter interface {
 | Provider | Status | Notes |
 |----------|--------|-------|
 | **Mock** | ✅ Ready | Simulates realistic transcription for testing |
-| **Google STT** | ✅ Ready | Uses `SingleUtterance` mode for boundary detection |
+| **Google STT** | ✅ Ready | Supports continuous and single-utterance modes |
 | **Azure STT** | 🔜 Planned | Future implementation |
 | **AWS Transcribe** | 🔜 Planned | Future implementation |
 
@@ -196,6 +196,7 @@ All configuration is via environment variables with safe defaults. No dynamic re
 | `STT_SAMPLE_RATE_HZ` | Audio sample rate in Hertz | `8000` |
 | `STT_INTERIM_RESULTS` | Enable partial/interim transcripts | `true` |
 | `STT_AUDIO_ENCODING` | Audio encoding (`LINEAR16`, `MULAW`, `FLAC`, etc.) | `LINEAR16` |
+| `STT_SINGLE_UTTERANCE` | Enable single utterance mode (see below) | `false` |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Path to Google Cloud service account JSON | - |
 
 ### Segment Guardrails (Backpressure)
@@ -312,10 +313,32 @@ Audio Stream: "I want to cancel" [pause] "Yes please go ahead"
                  Detected                  Detected
 ```
 
+#### Transcription Modes
+
+The service supports two transcription modes controlled by `STT_SINGLE_UTTERANCE`:
+
+| Mode | `STT_SINGLE_UTTERANCE` | Behavior | Best For |
+|------|------------------------|----------|----------|
+| **Continuous** (default) | `false` | Google sends multiple finals per stream session. Each final creates a new segment automatically. | Multi-sentence audio, recordings |
+| **Single Utterance** | `true` | Google stops after each utterance. Session restarts for next utterance. | Conversational with natural pauses |
+
+**Continuous Mode** (`STT_SINGLE_UTTERANCE=false`, default):
+- Google transcribes entire audio stream in one session
+- Each `isFinal=true` result triggers a new segment
+- Best for audio with multiple consecutive sentences
+- Example: 10-sentence recording → 10 segments
+
+**Single Utterance Mode** (`STT_SINGLE_UTTERANCE=true`):
+- Google detects speech pauses via Voice Activity Detection (VAD)
+- Returns `END_OF_SINGLE_UTTERANCE` event on pause
+- Session restarts after each utterance (may lose buffered audio)
+- Best for conversational audio with clear pauses
+
 **How it works:**
-- **Google STT**: Uses `SingleUtterance` mode which returns `END_OF_SINGLE_UTTERANCE` event
+- **Google STT (Continuous)**: Each `isFinal=true` creates new segment, no session restart
+- **Google STT (Single Utterance)**: `END_OF_SINGLE_UTTERANCE` triggers session restart
 - **Mock STT**: Simulates utterance completion after all partials are sent
-- **Handler**: Transitions to new segment on `OnEndOfUtterance()` callback
+- **Handler**: Manages segment transitions based on mode
 
 ## Events
 
