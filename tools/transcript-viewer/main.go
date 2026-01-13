@@ -146,10 +146,10 @@ func consumeKafkaPartition(ctx context.Context, hub *Hub, brokers, topic string,
 	})
 	defer reader.Close()
 
-	// Start from the latest offset (only show new messages)
-	reader.SetOffsetAt(ctx, time.Now().Add(-1*time.Hour)) // Last hour of messages
+	// Start from the END of the topic - only show NEW messages
+	reader.SetOffset(kafka.LastOffset)
 
-	log.Printf("Consuming from Kafka topic: %s partition %d", topic, partition)
+	log.Printf("Consuming from Kafka topic: %s partition %d (new messages only)", topic, partition)
 
 	for {
 		select {

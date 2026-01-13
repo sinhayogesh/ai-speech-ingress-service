@@ -600,6 +600,11 @@
         let currentPartialSegment = '';  // Track which segment the partial belongs to
         let displayedPartialText = '';   // What's currently shown (for typing effect)
         let typingTimer = null;          // Timer for typing effect
+        
+        // Message queue for natural pacing
+        let messageQueue = [];           // Queue of pending messages
+        let isProcessingQueue = false;   // Are we currently processing?
+        const MESSAGE_DELAY = 150;       // ms between processing messages (natural pace)
 
         function connect() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -624,14 +629,41 @@
             ws.onmessage = (event) => {
                 try {
                     const data = JSON.parse(event.data);
-                    console.log('Received:', data.eventType, data.segmentId, data.text?.substring(0, 30));
-                    handleTranscript(data);
+                    // Queue the message for natural pacing
+                    queueMessage(data);
                 } catch (e) {
                     console.error('Parse error:', e, event.data);
                 }
             };
         }
 
+        function queueMessage(data) {
+            messageQueue.push(data);
+            
+            // Start processing if not already running
+            if (!isProcessingQueue) {
+                processQueue();
+            }
+        }
+        
+        function processQueue() {
+            if (messageQueue.length === 0) {
+                isProcessingQueue = false;
+                return;
+            }
+            
+            isProcessingQueue = true;
+            const data = messageQueue.shift();
+            
+            // Process finals immediately (they're important), delay partials
+            const delay = data.eventType === 'interaction.transcript.final' ? 50 : MESSAGE_DELAY;
+            
+            handleTranscript(data);
+            
+            // Process next message after delay
+            setTimeout(processQueue, delay);
+        }
+        
         function handleTranscript(data) {
             // Hide empty state (check for null in case elements were removed)
             const emptyState = document.getElementById('empty-state');
@@ -777,6 +809,8 @@
             currentPartialText = '';
             currentPartialSegment = '';
             displayedPartialText = '';
+            messageQueue = [];
+            isProcessingQueue = false;
             if (typingTimer) {
                 clearTimeout(typingTimer);
                 typingTimer = null;
@@ -849,11 +883,10 @@
             // Type out character by character
             function typeNextChar() {
                 if (displayedPartialText.length < currentPartialText.length) {
-                    // Add next few characters (type 2-3 chars at a time for smoother effect)
-                    const charsToAdd = Math.min(3, currentPartialText.length - displayedPartialText.length);
-                    displayedPartialText = currentPartialText.substring(0, displayedPartialText.length + charsToAdd);
+                    // Add next character (one at a time for natural typing feel)
+                    displayedPartialText = currentPartialText.substring(0, displayedPartialText.length + 1);
                     renderFullTranscript();
-                    typingTimer = setTimeout(typeNextChar, 30); // 30ms per batch = ~100 chars/sec
+                    typingTimer = setTimeout(typeNextChar, 40); // 40ms per char = ~25 chars/sec (natural reading speed)
                 }
             }
             
