@@ -15,12 +15,14 @@
             --accent-primary: #00d4aa;
             --accent-secondary: #7c3aed;
             --accent-warning: #f59e0b;
+            --accent-llm: #3b82f6;
             --text-primary: #e6edf3;
             --text-secondary: #8b949e;
             --text-muted: #484f58;
             --border: #21262d;
             --partial-bg: rgba(124, 58, 237, 0.1);
             --final-bg: rgba(0, 212, 170, 0.1);
+            --llm-bg: rgba(59, 130, 246, 0.1);
             --radius: 12px;
             --shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
         }
@@ -169,6 +171,7 @@
         .stat-card.partials .stat-value { color: var(--accent-secondary); }
         .stat-card.finals .stat-value { color: var(--accent-primary); }
         .stat-card.segments .stat-value { color: var(--accent-warning); }
+        .stat-card.responses .stat-value { color: var(--accent-llm); }
 
         /* Main content */
         .content {
@@ -246,6 +249,16 @@
         .transcript-item.final {
             background: var(--final-bg);
             border-left-color: var(--accent-primary);
+        }
+
+        .transcript-item.llm-response {
+            background: var(--llm-bg);
+            border-left-color: var(--accent-llm);
+        }
+
+        .transcript-item.llm-response .transcript-type {
+            background: var(--accent-llm);
+            color: white;
         }
 
         .transcript-meta {
@@ -554,6 +567,13 @@
                     <span class="stat-label">Segments</span>
                 </div>
             </div>
+            <div class="stat-card responses">
+                <span class="stat-icon">🤖</span>
+                <div class="stat-content">
+                    <span class="stat-value" id="response-count">0</span>
+                    <span class="stat-label">LLM Responses</span>
+                </div>
+            </div>
         </div>
 
         <div class="content">
@@ -592,6 +612,7 @@
         let segments = new Map();
         let partialCount = 0;
         let finalCount = 0;
+        let responseCount = 0;
         let currentFilter = '';
         
         // Full transcript tracking
@@ -685,6 +706,9 @@
                 fullTranscriptFinals.push(data.text.trim());
                 currentPartialText = '';
                 currentPartialSegment = '';
+            } else if (data.eventType === 'interaction.response.proposed') {
+                responseCount++;
+                document.getElementById('response-count').textContent = responseCount;
             }
             
             // Update the full transcript display
@@ -725,21 +749,36 @@
 
             const list = document.getElementById('transcript-list');
             const isPartial = data.eventType === 'interaction.transcript.partial';
+            const isLLMResponse = data.eventType === 'interaction.response.proposed';
             
             const item = document.createElement('div');
-            item.className = `transcript-item ${isPartial ? 'partial' : 'final'}`;
+            item.className = `transcript-item ${isLLMResponse ? 'llm-response' : (isPartial ? 'partial' : 'final')}`;
             item.dataset.interactionId = data.interactionId;
             
             const time = new Date(data.timestamp).toLocaleTimeString();
             const confidence = data.confidence ? (data.confidence * 100).toFixed(1) : null;
             
+            // Determine display text and type label
+            let typeLabel = isPartial ? 'Partial' : 'Final';
+            let displayText = data.text;
+            let intentBadge = '';
+            
+            if (isLLMResponse) {
+                typeLabel = '🤖 LLM';
+                displayText = data.responseText || data.text;
+                if (data.intent) {
+                    intentBadge = `<span style="background: var(--accent-llm); color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; margin-left: 8px;">${escapeHtml(data.intent)}</span>`;
+                }
+            }
+            
             item.innerHTML = `
                 <div class="transcript-meta">
-                    <span class="transcript-type">${isPartial ? 'Partial' : 'Final'}</span>
+                    <span class="transcript-type">${typeLabel}</span>
+                    ${intentBadge}
                     <span>${data.segmentId}</span>
                     <span>${time}</span>
                 </div>
-                <div class="transcript-text">${escapeHtml(data.text)}</div>
+                <div class="transcript-text">${escapeHtml(displayText)}</div>
                 ${confidence ? `
                     <div class="confidence">
                         Confidence: ${confidence}%
@@ -803,6 +842,7 @@
             segments.clear();
             partialCount = 0;
             finalCount = 0;
+            responseCount = 0;
             
             // Clear full transcript data
             fullTranscriptFinals = [];
@@ -819,6 +859,7 @@
             document.getElementById('partial-count').textContent = '0';
             document.getElementById('final-count').textContent = '0';
             document.getElementById('segment-count').textContent = '0';
+            document.getElementById('response-count').textContent = '0';
             
             // Reset full transcript display
             document.getElementById('full-transcript').innerHTML = 

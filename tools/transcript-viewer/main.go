@@ -31,6 +31,9 @@ type TranscriptEvent struct {
 	Confidence    float64 `json:"confidence,omitempty"`
 	AudioOffsetMs int64   `json:"audioOffsetMs,omitempty"`
 	Timestamp     int64   `json:"timestamp"`
+	// LLM Response fields (for interaction.response.proposed events)
+	Intent       string `json:"intent,omitempty"`
+	ResponseText string `json:"responseText,omitempty"`
 }
 
 // Hub manages WebSocket connections
@@ -172,7 +175,12 @@ func consumeKafkaPartition(ctx context.Context, hub *Hub, brokers, topic string,
 				continue
 			}
 
-			log.Printf("📨 [P%d] %s: %s (segment: %s)", partition, event.EventType, truncate(event.Text, 40), event.SegmentID)
+			// Log based on event type
+			if event.EventType == "interaction.response.proposed" {
+				log.Printf("🤖 [P%d] %s: [%s] %s (segment: %s)", partition, event.EventType, event.Intent, truncate(event.ResponseText, 40), event.SegmentID)
+			} else {
+				log.Printf("📨 [P%d] %s: %s (segment: %s)", partition, event.EventType, truncate(event.Text, 40), event.SegmentID)
+			}
 			hub.broadcast <- event
 		}
 	}
@@ -190,6 +198,7 @@ func main() {
 	brokers := flag.String("brokers", "localhost:9092", "Kafka brokers (comma-separated)")
 	topicPartial := flag.String("topic-partial", "interaction.transcript.partial", "Partial transcript topic")
 	topicFinal := flag.String("topic-final", "interaction.transcript.final", "Final transcript topic")
+	topicResponse := flag.String("topic-response", "interaction.response.proposed", "LLM response topic")
 	partitions := flag.Int("partitions", 3, "Number of partitions per topic")
 	flag.Parse()
 
@@ -202,6 +211,7 @@ func main() {
 	// Start Kafka consumers for all partitions
 	consumeKafka(ctx, hub, *brokers, *topicPartial, *partitions)
 	consumeKafka(ctx, hub, *brokers, *topicFinal, *partitions)
+	consumeKafka(ctx, hub, *brokers, *topicResponse, *partitions)
 
 	// Serve static files
 	staticFS, _ := fs.Sub(staticFiles, "static")
@@ -212,7 +222,7 @@ func main() {
 
 	log.Printf("🎙️  Transcript Viewer starting on http://localhost:%s", *port)
 	log.Printf("   Kafka brokers: %s", *brokers)
-	log.Printf("   Topics: %s, %s (%d partitions each)", *topicPartial, *topicFinal, *partitions)
+	log.Printf("   Topics: %s, %s, %s (%d partitions each)", *topicPartial, *topicFinal, *topicResponse, *partitions)
 
 	if err := http.ListenAndServe(":"+*port, nil); err != nil {
 		log.Fatalf("Server error: %v", err)

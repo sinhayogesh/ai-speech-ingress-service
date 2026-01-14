@@ -4,7 +4,6 @@ package events
 import (
 	"context"
 	"encoding/json"
-	"net"
 	"time"
 
 	"github.com/rs/zerolog/log"
@@ -57,13 +56,11 @@ func New(cfg *Config) *Publisher {
 		}
 	}
 
+	// Create a custom dialer with longer timeouts
 	// Create a custom dialer with longer timeouts for DNS resolution in Kubernetes
 	dialer := &kafka.Dialer{
 		Timeout:   10 * time.Second,
 		DualStack: true,
-		Resolver: &net.Resolver{
-			PreferGo: true,
-		},
 	}
 
 	transport := &kafka.Transport{

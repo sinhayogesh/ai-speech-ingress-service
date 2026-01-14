@@ -11,37 +11,6 @@ A Go gRPC service for real-time speech-to-text transcription. It receives audio 
 - **Kubernetes-native** - Helm charts, health probes, graceful shutdown
 - **Observability** - Prometheus metrics, structured logging (zerolog), health endpoints
 
-## Project Status
-
-### ✅ Completed & Verified (v1 Frozen)
-
-| Feature | Status |
-|---------|--------|
-| gRPC audio ingestion | ✅ Done |
-| Google Streaming STT integration | ✅ Done |
-| Segment lifecycle & utterance boundaries | ✅ Done |
-| Partial vs Final semantics | ✅ Done |
-| Separate Kafka topics | ✅ Done |
-| Safety guardrails (limits + fail-closed) | ✅ Done |
-| Observability (logs + metrics) | ✅ Done |
-| Environment-driven configurability | ✅ Done |
-| End-to-end replay with real WAV | ✅ Done |
-| Real-time transcript viewer UI | ✅ Done |
-
-> **Speech Ingress core is CLOSED for v1.** Further changes should be product-driven.
-
-### 🟡 Deferred (Intentional TODOs)
-
-| TODO | Reason |
-|------|--------|
-| Automated test coverage | Better ROI after downstream services exist |
-| Advanced observability | Requires production traffic patterns |
-| Multi-language / multi-tenant | Product decision needed |
-| Advanced VAD / barge-in | Only relevant with agent interaction loop |
-| Cost optimization | Premature without usage data |
-
-> 📖 **See [docs/TODO.md](docs/TODO.md) for detailed rationale.**
-
 ## Architecture
 
 ```
