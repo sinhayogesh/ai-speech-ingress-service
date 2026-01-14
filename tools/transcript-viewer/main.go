@@ -38,11 +38,13 @@ type TranscriptEvent struct {
 
 // Hub manages WebSocket connections
 type Hub struct {
-	clients    map[*websocket.Conn]bool
-	broadcast  chan TranscriptEvent
-	register   chan *websocket.Conn
-	unregister chan *websocket.Conn
-	mu         sync.RWMutex
+	clients       map[*websocket.Conn]bool
+	broadcast     chan TranscriptEvent
+	register      chan *websocket.Conn
+	unregister    chan *websocket.Conn
+	mu            sync.RWMutex
+	seenResponses map[string]bool // Dedup LLM responses by segmentId
+	seenMu        sync.Mutex
 }
 
 func truncate(s string, maxLen int) string {
@@ -54,10 +56,11 @@ func truncate(s string, maxLen int) string {
 
 func newHub() *Hub {
 	return &Hub{
-		clients:    make(map[*websocket.Conn]bool),
-		broadcast:  make(chan TranscriptEvent, 100),
-		register:   make(chan *websocket.Conn),
-		unregister: make(chan *websocket.Conn),
+		clients:       make(map[*websocket.Conn]bool),
+		broadcast:     make(chan TranscriptEvent, 100),
+		register:      make(chan *websocket.Conn),
+		unregister:    make(chan *websocket.Conn),
+		seenResponses: make(map[string]bool),
 	}
 }
 
@@ -175,8 +178,16 @@ func consumeKafkaPartition(ctx context.Context, hub *Hub, brokers, topic string,
 				continue
 			}
 
-			// Log based on event type
+			// Deduplicate LLM responses (only show first response per segment)
 			if event.EventType == "interaction.response.proposed" {
+				hub.seenMu.Lock()
+				if hub.seenResponses[event.SegmentID] {
+					hub.seenMu.Unlock()
+					log.Printf("🔄 [P%d] SKIP duplicate response for segment: %s", partition, event.SegmentID)
+					continue
+				}
+				hub.seenResponses[event.SegmentID] = true
+				hub.seenMu.Unlock()
 				log.Printf("🤖 [P%d] %s: [%s] %s (segment: %s)", partition, event.EventType, event.Intent, truncate(event.ResponseText, 40), event.SegmentID)
 			} else {
 				log.Printf("📨 [P%d] %s: %s (segment: %s)", partition, event.EventType, truncate(event.Text, 40), event.SegmentID)

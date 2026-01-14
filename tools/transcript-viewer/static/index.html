@@ -990,22 +990,14 @@
                 const existingBubble = chatList.querySelector(`.chat-message.customer[data-segment-id="${data.segmentId}"]`);
                 
                 if (existingBubble) {
-                    // Update existing bubble in place with typing effect
+                    // Update existing bubble in place - direct update (partials are already "live")
                     const bubbleText = existingBubble.querySelector('.bubble-text');
                     const bubbleLabel = existingBubble.querySelector('.bubble-label');
                     const chatMeta = existingBubble.querySelector('.chat-meta');
                     
+                    // Direct text update - no animation for partials (they ARE the live feed)
                     if (bubbleText) {
-                        // Animate only the new characters
-                        const currentText = bubbleText.textContent || '';
-                        if (data.text.length > currentText.length) {
-                            // Type the additional characters
-                            bubbleText.classList.add('typing-effect');
-                            bubbleText.classList.remove('typing-complete');
-                            typeTextFrom(bubbleText, data.text, currentText.length, 25);
-                        } else {
-                            bubbleText.textContent = data.text;
-                        }
+                        bubbleText.textContent = data.text;
                     }
                     
                     if (isFinal) {
@@ -1033,7 +1025,7 @@
                         }
                     }
                 } else {
-                    // Create new bubble with typing effect
+                    // Create new bubble - show text directly for partials, animate for finals
                     const message = document.createElement('div');
                     message.className = `chat-message customer ${isPartial ? 'partial' : 'final'}`;
                     message.dataset.interactionId = data.interactionId;
@@ -1045,7 +1037,7 @@
                             <div class="bubble-header">
                                 <span class="bubble-label">${label}</span>
                             </div>
-                            <div class="bubble-text typing-effect"></div>
+                            <div class="bubble-text ${isPartial ? 'typing-effect' : ''}">${escapeHtml(data.text)}</div>
                         </div>
                         <div class="chat-meta">
                             <span>${data.segmentId.split('-').pop()}</span>
@@ -1061,11 +1053,6 @@
                         </div>
                     `;
                     chatList.appendChild(message);
-                    chatList.scrollTop = chatList.scrollHeight;
-                    
-                    // Type the text with animation
-                    const bubbleText = message.querySelector('.bubble-text');
-                    typeText(bubbleText, data.text, 25, !isFinal); // Keep cursor for partials
                 }
             }
             
