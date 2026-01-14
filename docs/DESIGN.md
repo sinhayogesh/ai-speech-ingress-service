@@ -598,22 +598,46 @@ Sends 6 audio frames to trigger:
 
 ---
 
-## Future Enhancements
+## Implementation Status
 
-### Phase 2
-- [ ] Azure STT adapter
-- [ ] Prometheus metrics (latency, counts, errors)
-- [ ] OpenTelemetry tracing
+### ✅ Completed (v1 Frozen)
 
-### Phase 3
-- [ ] Dead-letter queue for failed publishes
-- [ ] Retry logic with exponential backoff
-- [ ] Circuit breaker for STT providers
+| Component | Status | Notes |
+|-----------|--------|-------|
+| gRPC audio ingestion | ✅ Done | Client-streaming RPC |
+| Google Streaming STT | ✅ Done | Continuous + single utterance modes |
+| Mock STT adapter | ✅ Done | For local development |
+| Segment lifecycle | ✅ Done | Auto-transition on utterance end |
+| Partial/Final semantics | ✅ Done | Exactly-once final per segment |
+| Kafka publishing | ✅ Done | Separate topics for ACL control |
+| Safety guardrails | ✅ Done | Max bytes, duration, partials |
+| Prometheus metrics | ✅ Done | 15+ metrics exposed |
+| Structured logging | ✅ Done | zerolog with JSON output |
+| Health endpoints | ✅ Done | /healthz, /readyz |
+| Env configuration | ✅ Done | No dynamic reloads |
+| Transcript viewer | ✅ Done | Real-time WebSocket UI |
 
-### Phase 4
-- [ ] Speaker diarization
-- [ ] Multi-language support
-- [ ] Custom vocabulary/phrases
+### 🟡 Deferred TODOs
+
+| TODO | Priority | Rationale |
+|------|----------|-----------|
+| Automated test coverage | Medium | Better ROI after downstream services exist for E2E tests |
+| Advanced observability | Medium | Requires production traffic patterns |
+| Multi-language routing | Low | Product decision needed |
+| Advanced VAD / barge-in | Low | Only relevant with agent interaction loop |
+| Cost optimization | Low | Premature without usage data |
+
+> 📖 **See [TODO.md](TODO.md) for detailed rationale on deferred items.**
+
+### Future Phases (Product-Driven)
+
+When product requirements emerge:
+
+- **Azure STT adapter** - When Azure is preferred provider
+- **AWS Transcribe adapter** - When AWS is preferred provider
+- **Speaker diarization** - When multi-speaker detection needed
+- **Custom vocabulary** - When domain-specific terms needed
+- **Dead-letter queue** - When publish reliability is critical
 
 ---
 
