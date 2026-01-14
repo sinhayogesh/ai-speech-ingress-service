@@ -181,9 +181,9 @@
             min-height: 0;
         }
 
-        /* Transcript panel */
-        .transcript-panel {
-            flex: 2;
+        /* Chat panel - main conversation view */
+        .chat-panel {
+            flex: 3;
             display: flex;
             flex-direction: column;
             background: var(--bg-card);
@@ -199,6 +199,160 @@
             display: flex;
             align-items: center;
             gap: 8px;
+        }
+
+        .chat-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .chat-list::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .chat-list::-webkit-scrollbar-track {
+            background: transparent;
+        }
+
+        .chat-list::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 3px;
+        }
+
+        /* Chat message bubbles */
+        .chat-message {
+            display: flex;
+            flex-direction: column;
+            max-width: 75%;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        /* Customer messages - left side */
+        .chat-message.customer {
+            align-self: flex-start;
+        }
+
+        .chat-message.customer .bubble {
+            background: linear-gradient(135deg, var(--accent-secondary), #6d28d9);
+            border-radius: 18px 18px 18px 4px;
+        }
+
+        .chat-message.customer.partial .bubble {
+            background: var(--partial-bg);
+            border: 1px solid var(--accent-secondary);
+        }
+
+        .chat-message.customer.partial .bubble-text {
+            opacity: 0.8;
+            font-style: italic;
+        }
+
+        /* Agent/LLM messages - right side */
+        .chat-message.agent {
+            align-self: flex-end;
+        }
+
+        .chat-message.agent .bubble {
+            background: linear-gradient(135deg, var(--accent-llm), #1d4ed8);
+            border-radius: 18px 18px 4px 18px;
+        }
+
+        .bubble {
+            padding: 14px 18px;
+            color: white;
+        }
+
+        .bubble-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 6px;
+            font-size: 0.75rem;
+            opacity: 0.9;
+        }
+
+        .bubble-label {
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-size: 0.65rem;
+        }
+
+        .bubble-text {
+            font-size: 1rem;
+            line-height: 1.5;
+        }
+
+        .intent-badge {
+            background: rgba(255,255,255,0.2);
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.7rem;
+            font-weight: 500;
+        }
+
+        .chat-meta {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 6px;
+            font-size: 0.7rem;
+            color: var(--text-muted);
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .chat-message.customer .chat-meta {
+            padding-left: 4px;
+        }
+
+        .chat-message.agent .chat-meta {
+            justify-content: flex-end;
+            padding-right: 4px;
+        }
+
+        .confidence-inline {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .confidence-bar-inline {
+            width: 40px;
+            height: 4px;
+            background: var(--border);
+            border-radius: 2px;
+            overflow: hidden;
+        }
+
+        .confidence-fill-inline {
+            height: 100%;
+            background: var(--accent-primary);
+        }
+
+        /* Legacy transcript panel styles for segments */
+        .transcript-panel {
+            flex: 2;
+            display: flex;
+            flex-direction: column;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
         }
 
         .transcript-list {
@@ -228,17 +382,6 @@
             border-radius: 8px;
             border-left: 3px solid;
             animation: slideIn 0.3s ease-out;
-        }
-
-        @keyframes slideIn {
-            from {
-                opacity: 0;
-                transform: translateY(10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
         }
 
         .transcript-item.partial {
@@ -577,17 +720,20 @@
         </div>
 
         <div class="content">
-            <div class="transcript-panel">
+            <!-- Chat-style conversation view -->
+            <div class="chat-panel">
                 <div class="panel-header">
-                    <span>📜</span> Transcripts
+                    <span>💬</span> Conversation
+                    <span style="margin-left: 16px; font-size: 0.75rem; color: var(--text-secondary);">
+                        🎤 Customer (left) ↔️ 🤖 Agent (right)
+                    </span>
                     <button class="clear-btn" onclick="clearTranscripts()">Clear</button>
                 </div>
-                <input type="text" class="filter-input" placeholder="Filter by interaction ID..." id="filter-input" oninput="filterTranscripts()">
-                <div class="transcript-list" id="transcript-list">
-                    <div class="empty-state" id="empty-state">
-                        <span class="empty-state-icon">🔇</span>
-                        <div class="empty-state-text">Waiting for transcripts...</div>
-                        <div class="empty-state-hint">Start streaming audio to see live transcription</div>
+                <div class="chat-list" id="chat-list">
+                    <div class="empty-state" id="chat-empty">
+                        <span class="empty-state-icon">💬</span>
+                        <div class="empty-state-text">Start a conversation...</div>
+                        <div class="empty-state-hint">Customer transcripts appear on the left, agent responses on the right</div>
                     </div>
                 </div>
             </div>
@@ -596,6 +742,7 @@
                 <div class="panel-header">
                     <span>🔖</span> Segments
                 </div>
+                <input type="text" class="filter-input" placeholder="Filter by ID..." id="filter-input" oninput="filterTranscripts()">
                 <div class="segment-list" id="segment-list">
                     <div class="empty-state" id="segment-empty">
                         <span class="empty-state-icon">📭</span>
@@ -686,10 +833,10 @@
         }
         
         function handleTranscript(data) {
-            // Hide empty state (check for null in case elements were removed)
-            const emptyState = document.getElementById('empty-state');
+            // Hide empty states (check for null in case elements were removed)
+            const chatEmpty = document.getElementById('chat-empty');
             const segmentEmpty = document.getElementById('segment-empty');
-            if (emptyState) emptyState.style.display = 'none';
+            if (chatEmpty) chatEmpty.style.display = 'none';
             if (segmentEmpty) segmentEmpty.style.display = 'none';
 
             // Update counts and full transcript
@@ -747,50 +894,69 @@
                 return;
             }
 
-            const list = document.getElementById('transcript-list');
+            const chatList = document.getElementById('chat-list');
             const isPartial = data.eventType === 'interaction.transcript.partial';
+            const isFinal = data.eventType === 'interaction.transcript.final';
             const isLLMResponse = data.eventType === 'interaction.response.proposed';
             
-            const item = document.createElement('div');
-            item.className = `transcript-item ${isLLMResponse ? 'llm-response' : (isPartial ? 'partial' : 'final')}`;
-            item.dataset.interactionId = data.interactionId;
+            // Hide empty state
+            const chatEmpty = document.getElementById('chat-empty');
+            if (chatEmpty) chatEmpty.style.display = 'none';
             
             const time = new Date(data.timestamp).toLocaleTimeString();
             const confidence = data.confidence ? (data.confidence * 100).toFixed(1) : null;
             
-            // Determine display text and type label
-            let typeLabel = isPartial ? 'Partial' : 'Final';
-            let displayText = data.text;
-            let intentBadge = '';
+            const message = document.createElement('div');
+            message.dataset.interactionId = data.interactionId;
+            message.dataset.segmentId = data.segmentId;
             
             if (isLLMResponse) {
-                typeLabel = '🤖 LLM';
-                displayText = data.responseText || data.text;
-                if (data.intent) {
-                    intentBadge = `<span style="background: var(--accent-llm); color: white; padding: 2px 8px; border-radius: 4px; font-size: 0.7rem; margin-left: 8px;">${escapeHtml(data.intent)}</span>`;
-                }
+                // Agent/LLM response - right side
+                message.className = 'chat-message agent';
+                const displayText = data.responseText || data.text;
+                
+                message.innerHTML = `
+                    <div class="bubble">
+                        <div class="bubble-header">
+                            <span class="bubble-label">🤖 Agent</span>
+                            ${data.intent ? `<span class="intent-badge">${escapeHtml(data.intent)}</span>` : ''}
+                        </div>
+                        <div class="bubble-text">${escapeHtml(displayText)}</div>
+                    </div>
+                    <div class="chat-meta">
+                        ${confidence ? `<span class="confidence-inline">${confidence}%</span>` : ''}
+                        <span>${time}</span>
+                    </div>
+                `;
+            } else {
+                // Customer transcript - left side
+                message.className = `chat-message customer ${isPartial ? 'partial' : 'final'}`;
+                const label = isPartial ? '🎤 Speaking...' : '🎤 Customer';
+                
+                message.innerHTML = `
+                    <div class="bubble">
+                        <div class="bubble-header">
+                            <span class="bubble-label">${label}</span>
+                        </div>
+                        <div class="bubble-text">${escapeHtml(data.text)}</div>
+                    </div>
+                    <div class="chat-meta">
+                        <span>${data.segmentId.split('-').pop()}</span>
+                        ${confidence && !isPartial ? `
+                            <span class="confidence-inline">
+                                <div class="confidence-bar-inline">
+                                    <div class="confidence-fill-inline" style="width: ${confidence}%"></div>
+                                </div>
+                                ${confidence}%
+                            </span>
+                        ` : ''}
+                        <span>${time}</span>
+                    </div>
+                `;
             }
             
-            item.innerHTML = `
-                <div class="transcript-meta">
-                    <span class="transcript-type">${typeLabel}</span>
-                    ${intentBadge}
-                    <span>${data.segmentId}</span>
-                    <span>${time}</span>
-                </div>
-                <div class="transcript-text">${escapeHtml(displayText)}</div>
-                ${confidence ? `
-                    <div class="confidence">
-                        Confidence: ${confidence}%
-                        <div class="confidence-bar">
-                            <div class="confidence-fill" style="width: ${confidence}%"></div>
-                        </div>
-                    </div>
-                ` : ''}
-            `;
-            
-            list.appendChild(item);
-            list.scrollTop = list.scrollHeight;
+            chatList.appendChild(message);
+            chatList.scrollTop = chatList.scrollHeight;
         }
 
         function updateSegmentList() {
@@ -820,18 +986,20 @@
 
         function filterTranscripts() {
             currentFilter = document.getElementById('filter-input').value;
-            const list = document.getElementById('transcript-list');
-            list.innerHTML = '';
+            const chatList = document.getElementById('chat-list');
+            chatList.innerHTML = '';
             
             const filtered = transcripts.filter(t => 
-                !currentFilter || t.interactionId.includes(currentFilter)
+                !currentFilter || t.interactionId.includes(currentFilter) || t.segmentId.includes(currentFilter)
             );
             
             if (filtered.length === 0) {
-                const empty = document.getElementById('empty-state').cloneNode(true);
-                empty.style.display = 'flex';
-                empty.querySelector('.empty-state-text').textContent = currentFilter ? 'No matching transcripts' : 'Waiting for transcripts...';
-                list.appendChild(empty);
+                chatList.innerHTML = `
+                    <div class="empty-state" id="chat-empty" style="display: flex;">
+                        <span class="empty-state-icon">🔍</span>
+                        <div class="empty-state-text">${currentFilter ? 'No matching messages' : 'Start a conversation...'}</div>
+                    </div>
+                `;
             } else {
                 filtered.forEach(renderTranscript);
             }
@@ -866,12 +1034,12 @@
                 '<span class="full-transcript-empty">Start streaming audio to see the complete transcription here...</span>';
             
             // Recreate empty states since innerHTML = '' destroys them
-            const list = document.getElementById('transcript-list');
-            list.innerHTML = `
-                <div class="empty-state" id="empty-state">
-                    <span class="empty-state-icon">🔇</span>
-                    <div class="empty-state-text">Waiting for transcripts...</div>
-                    <div class="empty-state-hint">Start streaming audio to see live transcription</div>
+            const chatList = document.getElementById('chat-list');
+            chatList.innerHTML = `
+                <div class="empty-state" id="chat-empty">
+                    <span class="empty-state-icon">💬</span>
+                    <div class="empty-state-text">Start a conversation...</div>
+                    <div class="empty-state-hint">Customer transcripts appear on the left, agent responses on the right</div>
                 </div>
             `;
             
