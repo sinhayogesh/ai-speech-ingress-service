@@ -306,6 +306,58 @@
             font-weight: 500;
         }
 
+        /* Slide-in animations for chat messages */
+        .chat-message.agent {
+            animation: fadeSlideInRight 0.4s ease-out;
+        }
+
+        .chat-message.customer {
+            animation: fadeSlideInLeft 0.3s ease-out;
+        }
+
+        @keyframes fadeSlideInRight {
+            from {
+                opacity: 0;
+                transform: translateX(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes fadeSlideInLeft {
+            from {
+                opacity: 0;
+                transform: translateX(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        /* Typing cursor effect */
+        .typing-effect {
+            overflow: hidden;
+            border-right: 2px solid rgba(255,255,255,0.7);
+            animation: blink 0.7s step-end infinite;
+        }
+
+        @keyframes blink {
+            50% { border-color: transparent; }
+        }
+
+        .typing-complete {
+            border-right: none;
+            animation: none;
+        }
+
+        /* Customer typing has purple cursor */
+        .chat-message.customer .typing-effect {
+            border-right-color: rgba(168, 85, 247, 0.8);
+        }
+
         .chat-meta {
             display: flex;
             align-items: center;
@@ -906,13 +958,12 @@
             const time = new Date(data.timestamp).toLocaleTimeString();
             const confidence = data.confidence ? (data.confidence * 100).toFixed(1) : null;
             
-            const message = document.createElement('div');
-            message.dataset.interactionId = data.interactionId;
-            message.dataset.segmentId = data.segmentId;
-            
             if (isLLMResponse) {
-                // Agent/LLM response - right side
+                // Agent/LLM response - right side with typing effect
+                const message = document.createElement('div');
                 message.className = 'chat-message agent';
+                message.dataset.interactionId = data.interactionId;
+                message.dataset.segmentId = data.segmentId;
                 const displayText = data.responseText || data.text;
                 
                 message.innerHTML = `
@@ -921,41 +972,103 @@
                             <span class="bubble-label">🤖 Agent</span>
                             ${data.intent ? `<span class="intent-badge">${escapeHtml(data.intent)}</span>` : ''}
                         </div>
-                        <div class="bubble-text">${escapeHtml(displayText)}</div>
+                        <div class="bubble-text typing-effect"></div>
                     </div>
                     <div class="chat-meta">
                         ${confidence ? `<span class="confidence-inline">${confidence}%</span>` : ''}
                         <span>${time}</span>
                     </div>
                 `;
-            } else {
-                // Customer transcript - left side
-                message.className = `chat-message customer ${isPartial ? 'partial' : 'final'}`;
-                const label = isPartial ? '🎤 Speaking...' : '🎤 Customer';
+                chatList.appendChild(message);
+                chatList.scrollTop = chatList.scrollHeight;
                 
-                message.innerHTML = `
-                    <div class="bubble">
-                        <div class="bubble-header">
-                            <span class="bubble-label">${label}</span>
+                // Typing effect for LLM response
+                const bubbleText = message.querySelector('.bubble-text');
+                typeText(bubbleText, displayText, 30); // 30ms per character
+            } else {
+                // Customer transcript - update in place for same segment
+                const existingBubble = chatList.querySelector(`.chat-message.customer[data-segment-id="${data.segmentId}"]`);
+                
+                if (existingBubble) {
+                    // Update existing bubble in place with typing effect
+                    const bubbleText = existingBubble.querySelector('.bubble-text');
+                    const bubbleLabel = existingBubble.querySelector('.bubble-label');
+                    const chatMeta = existingBubble.querySelector('.chat-meta');
+                    
+                    if (bubbleText) {
+                        // Animate only the new characters
+                        const currentText = bubbleText.textContent || '';
+                        if (data.text.length > currentText.length) {
+                            // Type the additional characters
+                            bubbleText.classList.add('typing-effect');
+                            bubbleText.classList.remove('typing-complete');
+                            typeTextFrom(bubbleText, data.text, currentText.length, 25);
+                        } else {
+                            bubbleText.textContent = data.text;
+                        }
+                    }
+                    
+                    if (isFinal) {
+                        // Convert from partial to final
+                        existingBubble.classList.remove('partial');
+                        existingBubble.classList.add('final');
+                        if (bubbleLabel) bubbleLabel.textContent = '🎤 Customer';
+                        if (bubbleText) {
+                            bubbleText.classList.remove('typing-effect');
+                            bubbleText.classList.add('typing-complete');
+                        }
+                        if (chatMeta) {
+                            chatMeta.innerHTML = `
+                                <span>${data.segmentId.split('-').pop()}</span>
+                                ${confidence ? `
+                                    <span class="confidence-inline">
+                                        <div class="confidence-bar-inline">
+                                            <div class="confidence-fill-inline" style="width: ${confidence}%"></div>
+                                        </div>
+                                        ${confidence}%
+                                    </span>
+                                ` : ''}
+                                <span>${time}</span>
+                            `;
+                        }
+                    }
+                } else {
+                    // Create new bubble with typing effect
+                    const message = document.createElement('div');
+                    message.className = `chat-message customer ${isPartial ? 'partial' : 'final'}`;
+                    message.dataset.interactionId = data.interactionId;
+                    message.dataset.segmentId = data.segmentId;
+                    const label = isPartial ? '🎤 Speaking...' : '🎤 Customer';
+                    
+                    message.innerHTML = `
+                        <div class="bubble">
+                            <div class="bubble-header">
+                                <span class="bubble-label">${label}</span>
+                            </div>
+                            <div class="bubble-text typing-effect"></div>
                         </div>
-                        <div class="bubble-text">${escapeHtml(data.text)}</div>
-                    </div>
-                    <div class="chat-meta">
-                        <span>${data.segmentId.split('-').pop()}</span>
-                        ${confidence && !isPartial ? `
-                            <span class="confidence-inline">
-                                <div class="confidence-bar-inline">
-                                    <div class="confidence-fill-inline" style="width: ${confidence}%"></div>
-                                </div>
-                                ${confidence}%
-                            </span>
-                        ` : ''}
-                        <span>${time}</span>
-                    </div>
-                `;
+                        <div class="chat-meta">
+                            <span>${data.segmentId.split('-').pop()}</span>
+                            ${confidence && !isPartial ? `
+                                <span class="confidence-inline">
+                                    <div class="confidence-bar-inline">
+                                        <div class="confidence-fill-inline" style="width: ${confidence}%"></div>
+                                    </div>
+                                    ${confidence}%
+                                </span>
+                            ` : ''}
+                            <span>${time}</span>
+                        </div>
+                    `;
+                    chatList.appendChild(message);
+                    chatList.scrollTop = chatList.scrollHeight;
+                    
+                    // Type the text with animation
+                    const bubbleText = message.querySelector('.bubble-text');
+                    typeText(bubbleText, data.text, 25, !isFinal); // Keep cursor for partials
+                }
             }
             
-            chatList.appendChild(message);
             chatList.scrollTop = chatList.scrollHeight;
         }
 
@@ -1056,6 +1169,46 @@
             const div = document.createElement('div');
             div.textContent = text;
             return div.innerHTML;
+        }
+
+        // Typing effect for messages
+        function typeText(element, text, speed = 30, keepCursor = false) {
+            let i = 0;
+            element.textContent = '';
+            
+            function type() {
+                if (i < text.length) {
+                    element.textContent += text.charAt(i);
+                    i++;
+                    // Scroll to keep typing visible
+                    const chatList = document.getElementById('chat-list');
+                    if (chatList) chatList.scrollTop = chatList.scrollHeight;
+                    setTimeout(type, speed);
+                } else if (!keepCursor) {
+                    // Done typing - remove cursor
+                    element.classList.remove('typing-effect');
+                    element.classList.add('typing-complete');
+                }
+            }
+            type();
+        }
+
+        // Continue typing from a specific position (for partial updates)
+        function typeTextFrom(element, text, startFrom, speed = 30) {
+            let i = startFrom;
+            element.textContent = text.substring(0, startFrom);
+            
+            function type() {
+                if (i < text.length) {
+                    element.textContent += text.charAt(i);
+                    i++;
+                    const chatList = document.getElementById('chat-list');
+                    if (chatList) chatList.scrollTop = chatList.scrollHeight;
+                    setTimeout(type, speed);
+                }
+                // Keep cursor for partials - will be removed when final arrives
+            }
+            type();
         }
 
         function updateFullTranscript() {
